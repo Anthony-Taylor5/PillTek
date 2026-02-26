@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['Bottle A', 'Bottle B', 'Bottle C']
+
+roboflow:
+  workspace: seniordesign-yht0c
+  project: seniordesign-hf6ds
+  version: 7
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/seniordesign-yht0c/seniordesign-hf6ds/dataset/7
