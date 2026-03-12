@@ -8,7 +8,7 @@
 #include "WiFi.h"
 
 #include <HTTPClient.h>
-const char* pythonServer = "http://192.168.0.115:5000/trigger"; //"http://172.20.10.2:5000/trigger";    
+const char* pythonServer = "http://192.168.0.152:5000/trigger";  //
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -18,8 +18,8 @@ const char* pythonServer = "http://192.168.0.115:5000/trigger"; //"http://172.20
 // ===========================
 // Enter your WiFi credentials
 // ===========================
-const char *ssid = "T-Mobile Hotspot_6218_2.4GHz";    //"Anthony's iPhone (2)"; 
-const char *password = "54786218";     //"taylor123";
+const char *ssid = "Jio Ant";  // "T-Mobile Hotspot_6218_2.4GHz";   
+const char *password =   "sigmaalpha"; //"54786218";
 
 
 const char* BEACON_MAC = "dd:34:02:0a:2d:f1"; 
@@ -141,20 +141,20 @@ void setup() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000; //changed from 2
-  config.frame_size = FRAMESIZE_SVGA;
+  config.frame_size = FRAMESIZE_QVGA;
   config.pixel_format = PIXFORMAT_JPEG;  // for streaming
   //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  config.grab_mode = CAMERA_GRAB_LATEST;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 12;
-  config.fb_count = 1;
+  config.fb_count = 3;
 
   // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
   //                      for larger pre-allocated frame buffer.
   if (config.pixel_format == PIXFORMAT_JPEG) {
     if (psramFound()) {
-      config.jpeg_quality = 40;
-      config.fb_count = 2;
+      config.jpeg_quality = 12;
+      config.fb_count = 3;
       //config.grab_mode = CAMERA_GRAB_LATEST;
       config.frame_size = FRAMESIZE_QVGA;//FRAMESIZE_240X240;
     } else {
@@ -358,7 +358,7 @@ void loop() {
       }
     }
     
-    //esp status print every 5 seconds
+    // esp status print every 5 seconds
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint > 5000) {
       float seconds = millis() / 1000.0;
@@ -376,11 +376,11 @@ void loop() {
     }     
 }
 
-  // // BLEScanResults* foundDevices = pBLEScan->start(0, false);
-  // // int count = foundDevices->getCount();
-  // // Serial.print("Devices found: ");
-  // // Serial.println(count);
-  // // Serial.println("Scan done!");
-  // // pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
+  // BLEScanResults* foundDevices = pBLEScan->start(0, false);
+  // int count = foundDevices->getCount();
+  // Serial.print("Devices found: ");
+  // Serial.println(count);
+  // Serial.println("Scan done!");
+  // pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
   // delay(5000);
 

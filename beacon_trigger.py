@@ -18,7 +18,7 @@ def trigger():
         # Only start if not already running
         if running_process is None or running_process.poll() is not None:
             print("Starting subprocesses...")
-            running_process = subprocess.Popen(["python", "detect_people.py"])
+            running_process = subprocess.Popen(["python", "test_with_hand_recognition.py"])
         else:
             print("subprocesses already running")
 

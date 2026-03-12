@@ -12,13 +12,14 @@ STREAM_URL = "http://192.168.0.211:81/stream" #"http://172.20.10.4:81/stream"
 cap = cv2.VideoCapture(STREAM_URL)
 
 # print("Press 's' to save an image, 'q' to quit")
-print("Press a for A, Press b for B, Press c for C, Press d for combined, Press e for Hazard, print f for hand")
+print("Press a for A, Press b for B, Press c for C, Press d for combined, Press e for Hazard, print f for hand, press x for same bottles")
 A_IMAGES_DIR = "A images"
 B_IMAGES_DIR = "B images"
 C_IMAGES_DIR = "C images"
 COMBINED_IMAGES_DIR = "combined images"
 HAZARD_IMAGES_DIR = "hazard images"
 HAND_IMAGES_DIR = "hand images"
+SAME_BOTTLES_DIR = "same bottle images"
 
 os.makedirs(A_IMAGES_DIR, exist_ok=True)
 os.makedirs(B_IMAGES_DIR, exist_ok=True)
@@ -26,6 +27,7 @@ os.makedirs(C_IMAGES_DIR, exist_ok=True)
 os.makedirs(COMBINED_IMAGES_DIR, exist_ok=True)
 os.makedirs(HAZARD_IMAGES_DIR, exist_ok=True)
 os.makedirs(HAND_IMAGES_DIR, exist_ok=True)
+os.makedirs(SAME_BOTTLES_DIR, exist_ok=True)
 
 while True:
     ret, frame = cap.read()
@@ -33,7 +35,7 @@ while True:
         break
     
     # Show live feed
-    cv2.imshow("Press a for A, Press b for B, Press c for C, Press d for combined, Press e for Hazard, press f for hand", frame)
+    cv2.imshow("Press a for A, Press b for B, Press c for C, Press d for combined, Press e for Hazard, press f for hand, press x for same bottles", frame)
     
     key = cv2.waitKey(1) & 0xFF
     
@@ -83,6 +85,14 @@ while True:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"pill~bottle-F_{timestamp}.jpg"
         out_path = os.path.join(HAND_IMAGES_DIR, filename)
+        cv2.imwrite(out_path, frame)
+        print(f"Saved: {filename}")
+        
+    elif key == ord('x'):
+        # Save image with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"pill~bottle-X_{timestamp}.jpg"
+        out_path = os.path.join(SAME_BOTTLES_DIR, filename)
         cv2.imwrite(out_path, frame)
         print(f"Saved: {filename}")
 

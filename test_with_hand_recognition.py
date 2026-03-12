@@ -8,13 +8,17 @@ import numpy as np
 from pathlib import Path
 from ultralytics import YOLO
 import threading
-
+import queue
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 
 """
 Usage command:
-python test_with_hand_recognition.py --weights runs/detect/runs/train_v82/weights/best.pt
+Home:
+python test_with_hand_recognition.py --weights runs/detect/runs/train_v10/weights/best.pt --source http://192.168.0.31:81/stream 
+Hotspot:
+python test_with_hand_recognition.py --weights runs/detect/runs/train_v10/weights/best.pt 
+
 
 Optional args:
   --source 0                               # webcam
@@ -77,6 +81,10 @@ class ThreadedVideoCapture:
     def __init__(self, src):
         self.src        = src
         self.cap        = create_capture(src)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.q = queue.Queue(maxsize=1)
+        self.running = True
+
         if not self.cap.isOpened():
             print("Cannot connect to stream!")
             exit()
@@ -123,6 +131,21 @@ class ThreadedVideoCapture:
 
     def read(self):
         return self.ret, (None if self.frame is None else self.frame.copy())
+    
+    def _reader(self):
+        while self.running:
+            self.cap.grab()
+            ok, frame = self.cap.read()
+            if not ok or frame is None:
+                time.sleep(0.01)
+                continue
+            if not self.q.empty():
+                try:
+                    self.q.get_nowait()
+                except queue.Empty:
+                    pass
+            self.q.put(frame)
+
 
     def release(self):
         self.stopped = True
@@ -232,27 +255,82 @@ class HandWorker:
 
 
 # ─── Drawing ──────────────────────────────────────────────────────────────────
+BOTTLE_HISTORY_LEN = 5
+_bottle_history: dict[int, list[tuple[int, int, int, int, float]]] = {}  # cls -> recent boxes
+
+def smooth_bottle_boxes(raw_boxes: list) -> list:
+    # Update history for each detected class
+    seen_classes = set()
+    for (x1, y1, x2, y2, cls, conf) in raw_boxes:
+        history = _bottle_history.setdefault(cls, [])
+        history.append((x1, y1, x2, y2, conf))
+        if len(history) > BOTTLE_HISTORY_LEN:
+            history.pop(0)
+        seen_classes.add(cls)
+
+    # Clear history for classes no longer detected
+    for cls in list(_bottle_history.keys()):
+        if cls not in seen_classes:
+            history = _bottle_history[cls]
+            if history:
+                history.pop(0)  # fade out gradually rather than instant clear
+
+    # Only emit a box if the class has been detected in the majority of recent frames
+    smoothed = []
+    for cls, history in _bottle_history.items():
+        if not history:
+            continue
+        if len(history) < BOTTLE_HISTORY_LEN and cls not in seen_classes:
+            continue
+        if sum(1 for _ in history) <= len(history) / 2:
+            continue
+        # Average the box coordinates over recent history
+        x1 = int(sum(b[0] for b in history) / len(history))
+        y1 = int(sum(b[1] for b in history) / len(history))
+        x2 = int(sum(b[2] for b in history) / len(history))
+        y2 = int(sum(b[3] for b in history) / len(history))
+        conf = history[-1][4]  # use most recent confidence for label
+        smoothed.append((x1, y1, x2, y2, cls, conf))
+
+    return smoothed
+
 
 def get_bottle_boxes(pill_results):
-    boxes = []
+    raw = []
     if pill_results is None:
-        return boxes
+        return raw
     for box in pill_results[0].boxes:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         cls  = int(box.cls[0])
         conf = float(box.conf[0])
-        boxes.append((x1, y1, x2, y2, cls, conf))
-    return boxes
+        raw.append((x1, y1, x2, y2, cls, conf))
+    return smooth_bottle_boxes(raw)
 
+GRAB_PADDING = 10  # pixels to expand bottle box in each direction for grab detection
+GRAB_HISTORY_LEN = 16  # number of frames to smooth over
+_grab_history: dict[int, list[bool]] = {}  # per-hand history
 
-def hand_overlaps_bottle(hand_landmarks, bottle_boxes, frame_shape) -> bool:
+def hand_overlaps_bottle(hand_idx: int, hand_landmarks, bottle_boxes, frame_shape) -> bool:
     h, w = frame_shape[:2]
-    lm   = hand_landmarks[9]
-    hx, hy = int(lm.x * w), int(lm.y * h)
+    points = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
+    raw = False
     for (x1, y1, x2, y2, _, _) in bottle_boxes:
-        if x1 <= hx <= x2 and y1 <= hy <= y2:
-            return True
-    return False
+        px1, py1 = x1 - GRAB_PADDING, y1 - GRAB_PADDING
+        px2, py2 = x2 + GRAB_PADDING, y2 + GRAB_PADDING
+        for (hx, hy) in points:
+            if px1 <= hx <= px2 and py1 <= hy <= py2:
+                raw = True
+                break
+        if raw:
+            break
+
+    history = _grab_history.setdefault(hand_idx, [])
+    history.append(raw)
+    if len(history) > GRAB_HISTORY_LEN:
+        history.pop(0)
+
+    # only flip state when the majority of recent frames agree
+    return sum(history) > len(history) / 2
 
 
 def draw_pill_boxes(frame, bottle_boxes, class_names):
@@ -271,8 +349,8 @@ def draw_hands(frame, hand_results, bottle_boxes):
     if hand_results is None or not hand_results.hand_landmarks:
         return
     h, w = frame.shape[:2]
-    for hand_landmarks in hand_results.hand_landmarks:
-        overlapping = hand_overlaps_bottle(hand_landmarks, bottle_boxes, frame.shape)
+    for hand_idx, hand_landmarks in enumerate(hand_results.hand_landmarks):
+        overlapping = hand_overlaps_bottle(hand_idx, hand_landmarks, bottle_boxes, frame.shape)
         color       = HAND_OVERLAP_COLOR if overlapping else HAND_COLOR
         points      = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
         for (a, b) in HAND_CONNECTIONS:
@@ -318,8 +396,8 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
         base_options=base_options,
         running_mode=mp_vision.RunningMode.VIDEO,
         num_hands=2,
-        min_hand_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
+        min_hand_detection_confidence=0.4,
+        min_tracking_confidence=0.4,
     )
     landmarker = mp_vision.HandLandmarker.create_from_options(hand_options)
 
@@ -378,18 +456,20 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+
 DATASETS = {
     "v2": "v2_with_background",
     "v4": "v4_with_combined",
     "v6": "v6_with_hazards",
-    "v8": "v8_with_hands"
+    "v8": "v8_with_hands",
+    "v10": "v10_with_same_bottles"
 }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run YOLO + MediaPipe hand detection inference.")
-    parser.add_argument("--weights", default=None, help="Path to YOLO weights (.pt)")
-    parser.add_argument("--source",  default="http://192.168.0.211:81/stream",
+    parser.add_argument("--weights", default="runs/detect/runs/train_v10/weights/best.pt", help="Path to YOLO weights (.pt)")
+    parser.add_argument("--source",  default="http://192.168.0.31:81/stream",
                         help="Video source: ESP32 stream URL or webcam index (0, 1, 2...)")
     parser.add_argument("--conf",    type=float, default=0.50, help="Confidence threshold")
     parser.add_argument("--imgsz",   type=int,   default=640,  help="Image size")

@@ -26,7 +26,7 @@ Examples:
   python train_two_datasets_yolo26n.py --dataset both --epochs 50 --epochs2 50 --device 0
  
   
-    python train_two_datasets_yolo26n.py  --weights runs/detect/runs/train_v8/weights/best.pt 
+    python train_two_datasets_yolo26n.py  --weights runs/detect/runs/train_v10/weights/best.pt 
 
 
 
@@ -47,7 +47,8 @@ DATASETS = {
     "v2": "v2_with_background",
     "v4": "v4_with_combined",
     "v6": "v6_with_hazards",
-    "v8": "v8_with_hands"
+    "v8": "v8_with_hands",
+    "v10": "v10_with_same_bottles"
 }
 
 
@@ -128,8 +129,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Train YOLO26n on v2/v4/v6/v8 datasets and run webcam inference.")
     parser.add_argument(
         "--dataset",
-        choices=["v2", "v4", "v6", "v8", "both"],
-        default="v8",
+        choices=["v2", "v4", "v6", "v8", "v10", "both"],
+        default="v10",
         help="Which dataset to train on (v2, v4, v6, v8 or all sequentially)",
     )
     parser.add_argument("--base-model", default="yolo26n.pt", help="Starting weights (default: yolo26n.pt)")
@@ -150,6 +151,7 @@ def main() -> int:
     v4_dir = cwd / DATASETS["v4"]
     v6_dir = cwd / DATASETS["v6"]
     v8_dir = cwd / DATASETS["v8"]
+    v10_dir =  cwd / DATASETS["v10"]
 
     final_weights: Path | None = None
 
@@ -208,12 +210,26 @@ def main() -> int:
             device=args.device,
             project=args.project,
         )
+    elif args.dataset == "v10":
+        data_yaml = assert_dataset_layout(v10_dir)
+        print(f"[INFO] Training on v10 dataset: {v10_dir}")
+        final_weights = train_once(
+            model_weights=args.base_model,
+            data_yaml=data_yaml,
+            run_name="train_v10",
+            epochs=args.epochs,
+            imgsz=args.imgsz,
+            batch=args.batch,
+            device=args.device,
+            project=args.project,
+        )
 
     else:  # both
         data_yaml_v2 = assert_dataset_layout(v2_dir)
         data_yaml_v4 = assert_dataset_layout(v4_dir)
         data_yaml_v6 = assert_dataset_layout(v6_dir)
         data_yaml_v8 = assert_dataset_layout(v8_dir)
+        data_yaml_v10 = assert_dataset_layout(v10_dir)
 
         print(f"[INFO] Stage 1: Training on v2 dataset: {v2_dir}")
         best_v2 = train_once(
@@ -267,8 +283,20 @@ def main() -> int:
         )
         print(f"[INFO] Stage 4 complete. Best weights: {best_v8}")
 
+        print(f"[INFO] Stage 5: Fine-tuning on v10 dataset: {v10_dir}")
+        best_v10 = train_once(
+            model_weights=str(best_v8),
+            data_yaml=data_yaml_v10,
+            run_name="train_v10_finetune_from_v8",
+            epochs=args.epochs2,
+            imgsz=args.imgsz,
+            batch=args.batch,
+            device=args.device,
+            project=args.project,
+        )
+        print(f"[INFO] Stage 5 complete. Best weights: {best_v10}")
 
-        final_weights = best_v8
+        final_weights = best_v10
 
     print(f"[INFO] Final trained weights: {final_weights}")
 

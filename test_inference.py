@@ -13,7 +13,7 @@ import threading
 
 """
 Usage command:
-python test_inference.py --weights runs/detect/runs/train_v82/weights/best.pt
+python test_inference.py --weights runs/detect/runs/train_v10/weights/best.pt
 
 
 
@@ -90,11 +90,13 @@ class ThreadedVideoCapture:
         if self.cap is not None:
             self.cap.release()
 
+
 DATASETS = {
     "v2": "v2_with_background",
     "v4": "v4_with_combined",
     "v6": "v6_with_hazards",
-    "v8": "v8_with_hands"
+    "v8": "v8_with_hands",
+    "v10": "v10_with_same_bottles"
 }
 
 
@@ -190,8 +192,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Train YOLO26n on v2/v4 datasets and run webcam inference.")
     parser.add_argument(
         "--dataset",
-        choices=["v2", "v4", "v6", "v8", "both"],
-        default="v8",
+        choices=["v2", "v4", "v6", "v8", "v10", "both"],
+        default="v10",
         help="Which dataset to train on (v2, v4, v6, or both sequentially)",
     )
     parser.add_argument("--imgsz", type=int, default=640, help="Image size")
