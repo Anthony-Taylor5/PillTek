@@ -1,5 +1,3 @@
-# PillTek: Pill Monitoring System
-
 # PillTek — Vision-Based Medication Monitoring System
 
 PillTek is a capstone project built by a five-person team at CSUN. It passively monitors medication adherence by detecting when a user interacts with a pill bottle using a combination of computer vision, BLE proximity sensing, and an ESP32-S3 camera module.
