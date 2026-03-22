@@ -147,11 +147,11 @@ def main() -> int:
     cwd = Path.cwd()
 
     # Resolve dataset folders
-    v2_dir = cwd / DATASETS["v2"]
-    v4_dir = cwd / DATASETS["v4"]
-    v6_dir = cwd / DATASETS["v6"]
-    v8_dir = cwd / DATASETS["v8"]
-    v10_dir =  cwd / DATASETS["v10"]
+    v2_dir = cwd / "dataset" / DATASETS["v2"]
+    v4_dir = cwd / "dataset" /  DATASETS["v4"]
+    v6_dir = cwd / "dataset" / DATASETS["v6"]
+    v8_dir = cwd / "dataset" /  DATASETS["v8"]
+    v10_dir =  cwd / "dataset" / DATASETS["v10"]
 
     final_weights: Path | None = None
 
