@@ -1,81 +1,23 @@
-import React, { useState } from "react";
-import { router } from "expo-router";
+import React from "react";
 import {
-  Alert,
   ImageBackground,
   SafeAreaView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
-  Pressable,
   View,
 } from "react-native";
-
 import { useRouter } from "expo-router";
 import BG from "../assets/pills/pill8.jpg";
+import { setRole } from "./role-store";
 
-// 🔐 Firebase imports
-import {
-  createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
-  signInWithEmailAndPassword,
-} from "firebase/auth";
-import { auth } from "../firebaseConfig";
+export default function RoleSelect() {
+  const router = useRouter();
 
-export default function Index() {
-  const router = useRouter(); // <-- MUST be inside component
-
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-
-  // LOGIN
-  const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert("Missing info", "Please enter both email and password.");
-      return;
-    }
-
-    try {
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        email.trim(),
-        password
-      );
-      console.log("LOGIN SUCCESS:", userCredential.user.email);
-
-      router.replace("/home");
-    } catch (error: any) {
-      console.log("LOGIN ERROR:", error.code, error.message);
-      Alert.alert("Login failed", error.code);
-    }
+  const handleRoleSelect = (role: "caregiver" | "patient") => {
+    setRole(role);
+    router.replace("/login");
   };
-
-  // CREATE ACCOUNT
-  const handleSignUp = async () => {
-    if (!email || !password) {
-      Alert.alert("Missing info", "Please enter both email and password.");
-      return;
-    }
-
-    try {
-      console.log("SIGNUP ATTEMPT:", email.trim());
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email.trim(),
-        password
-      );
-      console.log("SIGNUP SUCCESS:", userCredential.user.email);
-
-      router.replace("/(tabs)/patients");
-    } catch (error: any) {
-      console.log("SIGNUP ERROR:", error.code, error.message);
-      Alert.alert("Sign up failed", error.code);
-    }
-  };
-
-  // FORGOT PASSWORD
-    
 
   return (
     <ImageBackground
@@ -85,8 +27,8 @@ export default function Index() {
         width: "100%",
         height: "100%",
         resizeMode: "cover",
-        marginTop: 0,   // move image DOWN
-        marginLeft: 0,   // move image to the RIGHT
+        marginTop: 0,
+        marginLeft: 0,
         opacity: 0.9,
       }}
     >
@@ -98,57 +40,33 @@ export default function Index() {
           <View style={styles.headerContainer}>
             <Text style={styles.title}>PillTek</Text>
             <Text style={styles.subtitle}>
-              Sign in as caregiver to monitor your patients.
+              How will you be using the app?
             </Text>
           </View>
 
-          {/* Email */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your email"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </View>
-
-          {/* Password */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your password"
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-            />
-          </View>
-
-          {/* Login Button */}
-          <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
-            <Text style={styles.loginText}>Login</Text>
-          </TouchableOpacity>
-                    
-          {/* Forgot password */}
-          <Pressable
-            onPress={() => router.push("/forgot-password")}
-            style={{ marginTop: 12 }}
+          {/* Caregiver button */}
+          <TouchableOpacity
+            style={styles.roleButton}
+            onPress={() => handleRoleSelect("caregiver")}
           >
-            <Text style={{ textAlign: "center" }}>Forgot password?</Text>
-          </Pressable>
-
-
-          {/* Links */}
-          <View style={styles.linksContainer}>
-
-
-          <TouchableOpacity onPress={() => router.push("/create-account")}>
-          <Text style={styles.linkText}>Create account</Text>
+            <Text style={styles.roleButtonText}>I am a Caregiver</Text>
+            <Text style={styles.roleButtonSub}>
+              Monitor and manage your patients
+            </Text>
           </TouchableOpacity>
-          </View>
+
+          {/* Patient button */}
+          <TouchableOpacity
+            style={[styles.roleButton, styles.roleButtonSecondary]}
+            onPress={() => handleRoleSelect("patient")}
+          >
+            <Text style={[styles.roleButtonText, styles.roleButtonTextSecondary]}>
+              I am a Patient
+            </Text>
+            <Text style={[styles.roleButtonSub, styles.roleButtonSubSecondary]}>
+              View your medications and schedule
+            </Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     </ImageBackground>
@@ -175,7 +93,7 @@ const styles = StyleSheet.create({
   },
   headerContainer: {
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: 40,
   },
   title: {
     fontSize: 70,
@@ -189,30 +107,14 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#333",
     marginTop: 8,
-    marginBottom: 28,
-  },
-  fieldGroup: {
-    width: "100%",
-    marginBottom: 25,
-  },
-  label: {
-    fontSize: 14,
-    color: "#555",
-    textAlign: "center",
     marginBottom: 10,
   },
-  input: {
-    backgroundColor: "#FFFFFF",
-    height: 48,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    elevation: 2,
-  },
-  loginButton: {
-    marginTop: 20,
+  roleButton: {
+    marginTop: 16,
     backgroundColor: "#366a53ff",
-    paddingVertical: 12,
-    width: "60%",
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    width: "100%",
     borderRadius: 8,
     alignItems: "center",
     shadowColor: "#000",
@@ -221,20 +123,25 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 3,
   },
-  loginText: {
+  roleButtonSecondary: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
+    borderColor: "#366a53ff",
+  },
+  roleButtonText: {
     color: "#FFFFFF",
-    fontSize: 17,
-    fontWeight: "600",
+    fontSize: 18,
+    fontWeight: "700",
   },
-  linksContainer: {
-    marginTop: 30,
-    alignItems: "center",
+  roleButtonTextSecondary: {
+    color: "#366a53ff",
   },
-  linkText: {
-    marginVertical: 6,
-    fontSize: 14,
-    color: "#daf1dbff",
-    fontWeight: "600",
-    textAlign: "center",
+  roleButtonSub: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 13,
+    marginTop: 4,
+  },
+  roleButtonSubSecondary: {
+    color: "#555",
   },
 });

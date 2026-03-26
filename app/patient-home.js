@@ -15,33 +15,33 @@ import { signOut } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import DashboardRow from "../components/DashboardRow";
 
-export default function Home() {
+export default function PatientHome() {
   const router = useRouter();
 
-  const caregiverDisplayName = useMemo(() => {
+  const patientDisplayName = useMemo(() => {
     const u = auth.currentUser;
     if (u?.displayName && u.displayName.length > 0) return u.displayName;
     if (u?.email) return u.email;
-    return "Caregiver";
+    return "Patient";
   }, []);
 
-  const [patients, setPatients] = useState([
-    { id: "1", name: "Ahmad" },
-    { id: "2", name: "Shahriar" },
-    { id: "3", name: "Mina" },
+  const [medications, setMedications] = useState([
+    { id: "1", name: "Metformin 500mg", time: "8:00 AM" },
+    { id: "2", name: "Lisinopril 10mg", time: "12:00 PM" },
+    { id: "3", name: "Atorvastatin 20mg", time: "8:00 PM" },
   ]);
 
   const [menuVisible, setMenuVisible] = useState(false);
 
   const initials = useMemo(() => {
-    const parts = caregiverDisplayName.split(" ").filter(Boolean);
-    const first = parts[0]?.[0] ?? "C";
+    const parts = patientDisplayName.split(" ").filter(Boolean);
+    const first = parts[0]?.[0] ?? "P";
     const last = parts.length > 1 ? parts[parts.length - 1]?.[0] : "";
     return (first + last).toUpperCase();
-  }, [caregiverDisplayName]);
+  }, [patientDisplayName]);
 
-  const onPatientPress = (patient) => {
-    router.push({ pathname: "/patient-detail", params: { id: patient.id, name: patient.name } });
+  const onMedicationPress = (medication) => {
+    router.push({ pathname: "/medication-detail", params: { id: medication.id, name: medication.name, time: medication.time } });
   };
 
   const goMenu = (path) => {
@@ -65,7 +65,7 @@ export default function Home() {
               <Text style={styles.avatarText}>{initials}</Text>
             </View>
             <Text style={styles.displayName} numberOfLines={1}>
-              {caregiverDisplayName}
+              {patientDisplayName}
             </Text>
           </View>
 
@@ -79,17 +79,18 @@ export default function Home() {
         </View>
 
         {/* Section label + divider */}
-        <Text style={styles.sectionTitle}>patients</Text>
+        <Text style={styles.sectionTitle}>medications</Text>
         <View style={styles.divider} />
 
-        {/* Patient list */}
+        {/* Medication list */}
         <FlatList
-          data={patients}
+          data={medications}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <DashboardRow
               label={item.name}
-              onPress={() => onPatientPress(item)}
+              value={item.time}
+              onPress={() => onMedicationPress(item)}
             />
           )}
         />
@@ -105,23 +106,23 @@ export default function Home() {
             <Pressable style={styles.menuCard} onPress={() => {}}>
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => goMenu("/profile")}
+                onPress={() => goMenu("/patient-profile")}
               >
                 <Text style={styles.menuText}>Profile</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => goMenu("/add-patient")}
+                onPress={() => goMenu("/patient-medications")}
               >
-                <Text style={styles.menuText}>Add Patient</Text>
+                <Text style={styles.menuText}>My Medications</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => goMenu("/logs")}
+                onPress={() => goMenu("/patient-schedule")}
               >
-                <Text style={styles.menuText}>Logs</Text>
+                <Text style={styles.menuText}>My Schedule</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
