@@ -18,8 +18,8 @@ const char* pythonServer = "http://192.168.0.152:5000/trigger";  //
 // ===========================
 // Enter your WiFi credentials
 // ===========================
-const char *ssid = "Jio Ant";  // "T-Mobile Hotspot_6218_2.4GHz";   
-const char *password =   "sigmaalpha"; //"54786218";
+const char *ssid = "T-Mobile Hotspot_6218_2.4GHz";   //"Jio Ant";  // "T-Mobile Hotspot_6218_2.4GHz";   
+const char *password =   "54786218"; //"sigmaalpha"; //"54786218";
 
 
 const char* BEACON_MAC = "dd:34:02:0a:2d:f1"; 
