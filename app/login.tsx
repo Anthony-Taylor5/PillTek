@@ -30,6 +30,8 @@ export default function Login() {
     const role = getRole();
     if (role === "patient") {
       router.replace("/patient-home");
+    } else if (role === "self") {
+      router.replace("/self-home");
     } else {
       // Default to caregiver
       router.replace("/home");

@@ -7,8 +7,9 @@ import {
   ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
-import { getPatientMedications, getCaregiverPatientMeds } from "./medication-store";
+import { useFocusEffect } from "expo-router";
+import { getPatients } from "./patient-store";
+import { getCaregiverPatientMeds } from "./medication-store";
 import {
   buildCalendarGrid,
   isScheduledOn,
@@ -19,53 +20,78 @@ import {
   DAY_HEADERS,
 } from "./schedule-utils";
 
-// ── Mock medications ──────────────────────────────────────────────────────────
-// Used when no real store data is available (patient hasn't done bottle setup yet).
-// All fields match the shape produced by medication-details-entry + capture-bottles.
-const MOCK_MEDS = [
-  {
-    id: "1", name: "Metformin 500mg",
-    frequency: "Daily", times: ["8:00 AM"], time: "8:00 AM",
-    refill: "Monthly", addedAt: "2026-03-01T00:00:00.000Z", status: "Pending",
-  },
-  {
-    id: "2", name: "Lisinopril 10mg",
-    frequency: "3 times a week", times: ["12:00 PM"], time: "12:00 PM",
-    refill: "Monthly", addedAt: "2026-03-01T00:00:00.000Z", status: "Pending",
-  },
-  {
-    id: "3", name: "Atorvastatin 20mg",
-    frequency: "Daily", times: ["8:00 PM"], time: "8:00 PM",
-    refill: "Every 60 days", addedAt: "2026-03-01T00:00:00.000Z", status: "Pending",
-  },
-];
+// ── Mock medication data for pre-seeded patients ──────────────────────────────
+// Provides frequency, times, refill, and addedAt fields that the calendar needs.
+// Used only when getCaregiverPatientMeds returns nothing for a patient.
+const CAREGIVER_MOCK_MEDS = {
+  Ahmad: [
+    {
+      id: "m1", name: "Metformin 500mg",
+      frequency: "Daily", times: ["8:00 AM"], time: "8:00 AM",
+      refill: "Monthly", addedAt: "2026-03-01T00:00:00.000Z", status: "Taken",
+    },
+    {
+      id: "m2", name: "Aspirin 81mg",
+      frequency: "Daily", times: ["8:00 PM"], time: "8:00 PM",
+      refill: "Every 90 days", addedAt: "2026-03-01T00:00:00.000Z", status: "Pending",
+    },
+  ],
+  Shahriar: [
+    {
+      id: "m1", name: "Lisinopril 10mg",
+      frequency: "Daily", times: ["12:00 PM"], time: "12:00 PM",
+      refill: "Biweekly", addedAt: "2026-03-05T00:00:00.000Z", status: "Taken",
+    },
+    {
+      id: "m2", name: "Atorvastatin 20mg",
+      frequency: "Twice a week", times: ["8:00 PM"], time: "8:00 PM",
+      refill: "Every 60 days", addedAt: "2026-03-05T00:00:00.000Z", status: "Taken",
+    },
+  ],
+  Mina: [
+    {
+      id: "m1", name: "Metformin 500mg",
+      frequency: "Daily", times: ["8:00 AM"], time: "8:00 AM",
+      refill: "Monthly", addedAt: "2026-03-10T00:00:00.000Z", status: "Missed",
+    },
+    {
+      id: "m2", name: "Vitamin D 1000IU",
+      frequency: "Once a week", times: ["12:00 PM"], time: "12:00 PM",
+      refill: "Every 90 days", addedAt: "2026-03-10T00:00:00.000Z", status: "Taken",
+    },
+    {
+      id: "m3", name: "Atorvastatin 20mg",
+      frequency: "Daily", times: ["8:00 PM"], time: "8:00 PM",
+      refill: "Every 60 days", addedAt: "2026-03-10T00:00:00.000Z", status: "Pending",
+    },
+  ],
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const _now  = new Date();
 const TODAY = { year: _now.getFullYear(), month: _now.getMonth(), day: _now.getDate() };
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export default function PatientSchedule() {
-  // selfName is passed when self-managed users reach this screen from self-home.
-  // When absent the screen reads from the patient's own medication store.
-  const { selfName } = useLocalSearchParams();
+export default function CaregiverCalendar() {
+  const [year,        setYear]        = useState(TODAY.year);
+  const [month,       setMonth]       = useState(TODAY.month);
+  const [selectedDay, setSelectedDay] = useState(TODAY.day);
 
-  const [year,         setYear]         = useState(TODAY.year);
-  const [month,        setMonth]        = useState(TODAY.month);
-  const [selectedDay,  setSelectedDay]  = useState(TODAY.day);
-  const [medications,  setMedications]  = useState(MOCK_MEDS);
+  // Flat list of { patientName, med } covering all patients.
+  const [allMeds, setAllMeds] = useState([]);
 
-  // Refresh medication list whenever the screen gains focus.
   useFocusEffect(
     useCallback(() => {
-      let meds;
-      if (selfName) {
-        meds = getCaregiverPatientMeds(String(selfName)) ?? [];
-      } else {
-        meds = getPatientMedications();
-      }
-      setMedications(meds.length > 0 ? meds : MOCK_MEDS);
-    }, [selfName])
+      const patients = getPatients();
+      const merged = patients.flatMap((p) => {
+        const stored = getCaregiverPatientMeds(p.name);
+        const meds   = (stored && stored.length > 0)
+          ? stored
+          : (CAREGIVER_MOCK_MEDS[p.name] ?? []);
+        return meds.map((med) => ({ patientName: p.name, med }));
+      });
+      setAllMeds(merged);
+    }, [])
   );
 
   // ── Navigation ──────────────────────────────────────────────────────────────
@@ -80,34 +106,50 @@ export default function PatientSchedule() {
     else setMonth((m) => m + 1);
   };
 
-  // ── Calendar grid ────────────────────────────────────────────────────────────
+  // ── Calendar grid ─────────────────────────────────────────────────────────
   const weeks = useMemo(() => buildCalendarGrid(year, month), [year, month]);
 
-  // ── Per-day helpers ──────────────────────────────────────────────────────────
-  const medsOnDay = useCallback(
-    (day) => day ? medications.filter((m) => isScheduledOn(m, year, month, day)) : [],
-    [medications, year, month]
+  // ── Per-day helpers ───────────────────────────────────────────────────────
+  const entriesOnDay = useCallback(
+    (day) => day
+      ? allMeds.filter(({ med }) => isScheduledOn(med, year, month, day))
+      : [],
+    [allMeds, year, month]
   );
 
-  const hasMedDot = (day) => day && medsOnDay(day).length > 0;
+  const hasMedDot = (day) => day && entriesOnDay(day).length > 0;
   const hasRefillDot = (day) =>
     day &&
-    medications.some(
-      (m) => isRefillDueOn(m, year, month, day) || isRefillWarnOn(m, year, month, day)
+    allMeds.some(
+      ({ med }) =>
+        isRefillDueOn(med, year, month, day) || isRefillWarnOn(med, year, month, day)
     );
 
-  // ── Selected-day detail ──────────────────────────────────────────────────────
-  const selectedMeds = useMemo(() => medsOnDay(selectedDay), [selectedDay, medsOnDay]);
+  // ── Selected-day detail ───────────────────────────────────────────────────
+  const selectedEntries = useMemo(
+    () => entriesOnDay(selectedDay),
+    [selectedDay, entriesOnDay]
+  );
 
   const isToday = (day) =>
     day === TODAY.day && month === TODAY.month && year === TODAY.year;
 
-  // ── Render ───────────────────────────────────────────────────────────────────
+  // Group selected entries by patient name for display
+  const byPatient = useMemo(() => {
+    const map = {};
+    for (const { patientName, med } of selectedEntries) {
+      if (!map[patientName]) map[patientName] = [];
+      map[patientName].push(med);
+    }
+    return map;
+  }, [selectedEntries]);
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.safe} edges={["bottom"]}>
       <ScrollView contentContainerStyle={styles.container}>
 
-        <Text style={styles.sectionTitle}>my schedule</Text>
+        <Text style={styles.sectionTitle}>calendar</Text>
         <View style={styles.divider} />
 
         {/* Month navigation */}
@@ -168,7 +210,6 @@ export default function PatientSchedule() {
                     >
                       {day}
                     </Text>
-                    {/* Indicator dots — hidden on selected cell (detail shown below) */}
                     {!selected && (
                       <View style={styles.dotRow}>
                         {hasMed && <View style={styles.medDot} />}
@@ -205,34 +246,39 @@ export default function PatientSchedule() {
 
           {!selectedDay ? (
             <Text style={styles.emptyText}>Select a day above.</Text>
-          ) : selectedMeds.length === 0 ? (
-            <Text style={styles.emptyText}>No medications scheduled.</Text>
+          ) : selectedEntries.length === 0 ? (
+            <Text style={styles.emptyText}>No medications scheduled for any patient.</Text>
           ) : (
-            selectedMeds.map((med, i) => {
-              const refillDays = daysUntilRefill(med, year, month, selectedDay);
-              const warnRefill = refillDays !== null && refillDays <= 3;
-              const timeStr = Array.isArray(med.times) && med.times.length > 0
-                ? med.times.join("  ·  ")
-                : (med.time || "—");
-              return (
-                <View
-                  key={i}
-                  style={[styles.medEntry, i > 0 && styles.medEntryBorder]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.medName}>{med.name}</Text>
-                    <Text style={styles.medTime}>{timeStr}</Text>
-                    {warnRefill && (
-                      <Text style={styles.refillWarn}>
-                        {refillDays === 0
-                          ? "⚠ Refill due today"
-                          : `⚠ Refill due in ${refillDays} day${refillDays === 1 ? "" : "s"}`}
-                      </Text>
-                    )}
-                  </View>
-                </View>
-              );
-            })
+            Object.entries(byPatient).map(([patientName, meds], pi) => (
+              <View key={patientName} style={[styles.patientSection, pi > 0 && styles.patientBorder]}>
+                {/* Patient name header */}
+                <Text style={styles.patientLabel}>{patientName}</Text>
+
+                {meds.map((med, mi) => {
+                  const refillDays = daysUntilRefill(med, year, month, selectedDay);
+                  const warnRefill = refillDays !== null && refillDays <= 3;
+                  const timeStr = Array.isArray(med.times) && med.times.length > 0
+                    ? med.times.join("  ·  ")
+                    : (med.time || "—");
+                  return (
+                    <View
+                      key={mi}
+                      style={[styles.medEntry, mi > 0 && styles.medEntryBorder]}
+                    >
+                      <Text style={styles.medName}>{med.name}</Text>
+                      <Text style={styles.medTime}>{timeStr}</Text>
+                      {warnRefill && (
+                        <Text style={styles.refillWarn}>
+                          {refillDays === 0
+                            ? "⚠ Refill due today"
+                            : `⚠ Refill due in ${refillDays} day${refillDays === 1 ? "" : "s"}`}
+                        </Text>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            ))
           )}
         </View>
 
@@ -242,6 +288,8 @@ export default function PatientSchedule() {
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
+// Intentionally identical to patient-schedule.js — same card, dot, and
+// detail-panel specs so both screens look native to the same app.
 const styles = StyleSheet.create({
   safe:      { flex: 1, backgroundColor: "#e8f5e9" },
   container: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32 },
@@ -249,7 +297,6 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 24, fontWeight: "600", marginBottom: 10 },
   divider:      { borderBottomWidth: 1, borderBottomColor: "#666", marginBottom: 0 },
 
-  // Month navigation row
   monthNav: {
     flexDirection: "row",
     alignItems: "center",
@@ -257,11 +304,10 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 10,
   },
-  navBtn:    { padding: 6 },
-  navArrow:  { fontSize: 26, color: "#366a53", fontWeight: "600" },
+  navBtn:     { padding: 6 },
+  navArrow:   { fontSize: 26, color: "#366a53", fontWeight: "600" },
   monthLabel: { fontSize: 17, fontWeight: "600", color: "#111" },
 
-  // Calendar grid card — same visual spec as slotCard in previous version
   calCard: {
     backgroundColor: "#fff",
     borderRadius: 10,
@@ -275,7 +321,6 @@ const styles = StyleSheet.create({
   },
 
   weekRow: { flexDirection: "row" },
-
   dayCell: {
     flex: 1,
     height: 48,
@@ -288,16 +333,12 @@ const styles = StyleSheet.create({
   },
   dayCellEmpty:    { flex: 1, height: 48, marginVertical: 1, marginHorizontal: 1 },
   dayCellSelected: { backgroundColor: "#366a53" },
-  dayCellToday: {
-    borderWidth: 1.5,
-    borderColor: "#366a53",
-  },
+  dayCellToday:    { borderWidth: 1.5, borderColor: "#366a53" },
 
   dowHeader:     { fontSize: 11, fontWeight: "600", color: "#888" },
   dayNum:        { fontSize: 14, color: "#222" },
   dayNumSelected:{ color: "#fff", fontWeight: "700" },
   dayNumToday:   { color: "#366a53", fontWeight: "700" },
-  dayNumEmpty:   { opacity: 0 },
 
   dotRow: {
     flexDirection: "row",
@@ -306,20 +347,9 @@ const styles = StyleSheet.create({
     height: 6,
     alignItems: "center",
   },
-  medDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: "#366a53",
-  },
-  refillDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: "#e8871a",
-  },
+  medDot:    { width: 5, height: 5, borderRadius: 3, backgroundColor: "#366a53" },
+  refillDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: "#e8871a" },
 
-  // Legend
   legend: {
     flexDirection: "row",
     gap: 20,
@@ -331,7 +361,6 @@ const styles = StyleSheet.create({
   legendDot:  { width: 8, height: 8, borderRadius: 4 },
   legendText: { fontSize: 12, color: "#555" },
 
-  // Selected-day detail card
   detailCard: {
     backgroundColor: "#fff",
     borderRadius: 10,
@@ -342,22 +371,23 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     shadowOffset: { width: 0, height: 1 },
   },
-  detailTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#366a53",
-    marginBottom: 10,
-  },
-  detailDivider: {
-    borderBottomWidth: 1,
-    borderBottomColor: "#d6ebd9",
-    marginBottom: 8,
-  },
+  detailTitle: { fontSize: 16, fontWeight: "600", color: "#366a53", marginBottom: 10 },
+  detailDivider: { borderBottomWidth: 1, borderBottomColor: "#d6ebd9", marginBottom: 8 },
   emptyText: { fontSize: 14, color: "#888", paddingVertical: 8 },
 
-  medEntry: { paddingVertical: 10 },
-  medEntryBorder: { borderTopWidth: 1, borderTopColor: "#d6ebd9" },
-  medName: { fontSize: 15, fontWeight: "600", color: "#000" },
-  medTime: { fontSize: 13, color: "#555", marginTop: 2 },
-  refillWarn: { fontSize: 12, color: "#e8871a", fontWeight: "600", marginTop: 4 },
+  // Patient grouping inside detail card
+  patientSection: { paddingTop: 10 },
+  patientBorder:  { borderTopWidth: 1, borderTopColor: "#d6ebd9" },
+  patientLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#366a53",
+    marginBottom: 6,
+  },
+
+  medEntry:      { paddingVertical: 6 },
+  medEntryBorder:{ borderTopWidth: 1, borderTopColor: "#eaf4ec" },
+  medName:       { fontSize: 15, fontWeight: "600", color: "#000" },
+  medTime:       { fontSize: 13, color: "#555", marginTop: 2 },
+  refillWarn:    { fontSize: 12, color: "#e8871a", fontWeight: "600", marginTop: 4 },
 });

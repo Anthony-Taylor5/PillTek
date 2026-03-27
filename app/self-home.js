@@ -9,59 +9,51 @@ import {
   Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 
-import { useFocusEffect } from "expo-router";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import DashboardRow from "../components/DashboardRow";
-import { getPatientMedications } from "./medication-store";
+import { getCaregiverPatientMeds } from "./medication-store";
 
-export default function PatientHome() {
+// Self-managed home — mirrors the caregiver home (home.js) exactly in structure
+// and interaction style, but manages the user's own medications instead of a
+// patient list. "Add Patient" is intentionally absent from the menu.
+
+export default function SelfHome() {
   const router = useRouter();
 
-  const patientDisplayName = useMemo(() => {
+  const displayName = useMemo(() => {
     const u = auth.currentUser;
     if (u?.displayName && u.displayName.length > 0) return u.displayName;
     if (u?.email) return u.email;
-    return "Patient";
+    return "Self";
   }, []);
 
-  const MOCK_MEDICATIONS = [
-    { id: "1", name: "Metformin 500mg", time: "8:00 AM" },
-    { id: "2", name: "Lisinopril 10mg", time: "12:00 PM" },
-    { id: "3", name: "Atorvastatin 20mg", time: "8:00 PM" },
-  ];
+  // Medications are stored under the user's display name key in the same
+  // caregiver-patient med store that add-medication.js writes to.
+  const [medications, setMedications] = useState(
+    () => getCaregiverPatientMeds(displayName) ?? []
+  );
 
-  const [medications, setMedications] = useState(MOCK_MEDICATIONS);
-
-  // Re-read from the store each time this screen gains focus so that
-  // medications entered during bottle setup appear immediately on return.
   useFocusEffect(
     useCallback(() => {
-      const stored = getPatientMedications();
-      if (stored.length > 0) {
-        setMedications(stored);
-      }
-    }, [])
+      setMedications(getCaregiverPatientMeds(displayName) ?? []);
+    }, [displayName])
   );
 
   const [menuVisible, setMenuVisible] = useState(false);
 
   const initials = useMemo(() => {
-    const parts = patientDisplayName.split(" ").filter(Boolean);
-    const first = parts[0]?.[0] ?? "P";
+    const parts = displayName.split(" ").filter(Boolean);
+    const first = parts[0]?.[0] ?? "S";
     const last = parts.length > 1 ? parts[parts.length - 1]?.[0] : "";
     return (first + last).toUpperCase();
-  }, [patientDisplayName]);
+  }, [displayName]);
 
-  const onMedicationPress = (medication) => {
-    router.push({ pathname: "/medication-detail", params: { id: medication.id, name: medication.name, time: medication.time } });
-  };
-
-  const goMenu = (path) => {
+  const goMenu = (path, params) => {
     setMenuVisible(false);
-    router.push(path);
+    router.push(params ? { pathname: path, params } : path);
   };
 
   const handleLogout = async () => {
@@ -73,14 +65,14 @@ export default function PatientHome() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
-        {/* Header */}
+        {/* Header — identical structure to home.js */}
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{initials}</Text>
             </View>
             <Text style={styles.displayName} numberOfLines={1}>
-              {patientDisplayName}
+              {displayName}
             </Text>
           </View>
 
@@ -97,20 +89,25 @@ export default function PatientHome() {
         <Text style={styles.sectionTitle}>medications</Text>
         <View style={styles.divider} />
 
-        {/* Medication list */}
-        <FlatList
-          data={medications}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <DashboardRow
-              label={item.name}
-              value={item.time}
-              onPress={() => onMedicationPress(item)}
-            />
-          )}
-        />
+        {/* Medication list — empty-state hint when nothing added yet */}
+        {medications.length === 0 ? (
+          <Text style={styles.emptyText}>
+            No medications yet. Tap ⋮ → Add Medication to get started.
+          </Text>
+        ) : (
+          <FlatList
+            data={medications}
+            keyExtractor={(item, index) => item.id ?? String(index)}
+            renderItem={({ item }) => (
+              <DashboardRow
+                label={item.name}
+                value={item.time ?? "—"}
+              />
+            )}
+          />
+        )}
 
-        {/* 3-dot Menu Modal */}
+        {/* 3-dot Menu Modal — same spec as home.js, no "Add Patient" */}
         <Modal
           visible={menuVisible}
           transparent
@@ -128,23 +125,31 @@ export default function PatientHome() {
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => goMenu("/patient-medications")}
+                onPress={() =>
+                  goMenu("/add-medication", {
+                    patientId:   "self",
+                    patientName: displayName,
+                    patientCode: "",
+                  })
+                }
               >
-                <Text style={styles.menuText}>My Medications</Text>
+                <Text style={styles.menuText}>Add Medication</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => goMenu("/patient-schedule")}
+                onPress={() => goMenu("/self-logs")}
+              >
+                <Text style={styles.menuText}>Logs</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() =>
+                  goMenu("/patient-schedule", { selfName: displayName })
+                }
               >
                 <Text style={styles.menuText}>My Schedule</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => goMenu("/patient-daily-logs")}
-              >
-                <Text style={styles.menuText}>My Daily Log</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -209,6 +214,14 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#666",
     marginBottom: 0,
+  },
+
+  emptyText: {
+    marginTop: 32,
+    fontSize: 15,
+    color: "#888",
+    textAlign: "center",
+    lineHeight: 22,
   },
 
   backdrop: {

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,11 +9,12 @@ import {
   Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 
 import { signOut } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import DashboardRow from "../components/DashboardRow";
+import { getPatients } from "./patient-store";
 
 export default function Home() {
   const router = useRouter();
@@ -25,11 +26,15 @@ export default function Home() {
     return "Caregiver";
   }, []);
 
-  const [patients, setPatients] = useState([
-    { id: "1", name: "Ahmad" },
-    { id: "2", name: "Shahriar" },
-    { id: "3", name: "Mina" },
-  ]);
+  const [patients, setPatients] = useState(getPatients());
+
+  // Refresh the patient list each time this screen gains focus so that
+  // newly added patients (from add-patient.js) appear immediately on return.
+  useFocusEffect(
+    useCallback(() => {
+      setPatients(getPatients());
+    }, [])
+  );
 
   const [menuVisible, setMenuVisible] = useState(false);
 
@@ -41,7 +46,10 @@ export default function Home() {
   }, [caregiverDisplayName]);
 
   const onPatientPress = (patient) => {
-    router.push({ pathname: "/patient-detail", params: { id: patient.id, name: patient.name } });
+    router.push({
+      pathname: "/patient-detail",
+      params: { id: patient.id, name: patient.name, patientCode: patient.patientCode },
+    });
   };
 
   const goMenu = (path) => {
@@ -122,6 +130,13 @@ export default function Home() {
                 onPress={() => goMenu("/logs")}
               >
                 <Text style={styles.menuText}>Logs</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => goMenu("/caregiver-calendar")}
+              >
+                <Text style={styles.menuText}>Calendar</Text>
               </TouchableOpacity>
 
               <TouchableOpacity

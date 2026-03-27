@@ -24,7 +24,7 @@ export default function Profile() {
             <Text style={styles.avatarText}>{initials}</Text>
           </View>
           <Text style={styles.name}>{displayName}</Text>
-          <Text style={styles.role}>Caregiver</Text>
+          <Text style={styles.role}>Caretaker</Text>
         </View>
 
         {/* Info rows */}
@@ -39,7 +39,7 @@ export default function Profile() {
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Role</Text>
-            <Text style={styles.infoValue}>Caregiver</Text>
+            <Text style={styles.infoValue}>Caretaker</Text>
           </View>
 
           <View style={styles.infoRow}>

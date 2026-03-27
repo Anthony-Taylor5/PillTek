@@ -14,7 +14,7 @@ import { setRole } from "./role-store";
 export default function RoleSelect() {
   const router = useRouter();
 
-  const handleRoleSelect = (role: "caregiver" | "patient") => {
+  const handleRoleSelect = (role: "caregiver" | "patient" | "self") => {
     setRole(role);
     router.replace("/login");
   };
@@ -44,12 +44,12 @@ export default function RoleSelect() {
             </Text>
           </View>
 
-          {/* Caregiver button */}
+          {/* Caretaker button */}
           <TouchableOpacity
             style={styles.roleButton}
             onPress={() => handleRoleSelect("caregiver")}
           >
-            <Text style={styles.roleButtonText}>I am a Caregiver</Text>
+            <Text style={styles.roleButtonText}>Caretaker</Text>
             <Text style={styles.roleButtonSub}>
               Monitor and manage your patients
             </Text>
@@ -61,10 +61,23 @@ export default function RoleSelect() {
             onPress={() => handleRoleSelect("patient")}
           >
             <Text style={[styles.roleButtonText, styles.roleButtonTextSecondary]}>
-              I am a Patient
+              Patient
             </Text>
             <Text style={[styles.roleButtonSub, styles.roleButtonSubSecondary]}>
               View your medications and schedule
+            </Text>
+          </TouchableOpacity>
+
+          {/* Individual button */}
+          <TouchableOpacity
+            style={[styles.roleButton, styles.roleButtonSecondary]}
+            onPress={() => handleRoleSelect("self")}
+          >
+            <Text style={[styles.roleButtonText, styles.roleButtonTextSecondary]}>
+              Individual
+            </Text>
+            <Text style={[styles.roleButtonSub, styles.roleButtonSubSecondary]}>
+              Track medications on your own
             </Text>
           </TouchableOpacity>
         </View>

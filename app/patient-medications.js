@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useState, useCallback } from "react";
 import { View, Text, FlatList, StyleSheet } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import DashboardRow from "../components/DashboardRow";
+import { getPatientMedications } from "./medication-store";
 
-const MEDICATIONS = [
+const MOCK_MEDICATIONS = [
   { id: "1", name: "Metformin 500mg", time: "8:00 AM", status: "Taken" },
   { id: "2", name: "Lisinopril 10mg", time: "12:00 PM", status: "Taken" },
   { id: "3", name: "Atorvastatin 20mg", time: "8:00 PM", status: "Pending" },
@@ -12,6 +13,19 @@ const MEDICATIONS = [
 
 export default function PatientMedications() {
   const router = useRouter();
+  const [medications, setMedications] = useState(MOCK_MEDICATIONS);
+
+  // Refresh from the store each time this screen comes into focus.
+  // When the patient completes bottle setup, their medications are written
+  // to medication-store and appear here on the next visit.
+  useFocusEffect(
+    useCallback(() => {
+      const stored = getPatientMedications();
+      if (stored.length > 0) {
+        setMedications(stored);
+      }
+    }, [])
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={["bottom"]}>
@@ -19,7 +33,7 @@ export default function PatientMedications() {
         <Text style={styles.sectionTitle}>my medications</Text>
         <View style={styles.divider} />
         <FlatList
-          data={MEDICATIONS}
+          data={medications}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <DashboardRow

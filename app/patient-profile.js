@@ -2,11 +2,15 @@ import React, { useMemo } from "react";
 import { View, Text, StyleSheet, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth } from "../firebaseConfig";
+import { getLinkedCaregiverCode } from "./patient-store";
+import { getRole } from "./role-store";
 
 export default function PatientProfile() {
   const user = auth.currentUser;
   const displayName = user?.displayName || user?.email || "Patient";
   const email = user?.email || "—";
+  const linkedCode = getLinkedCaregiverCode();
+  const role = getRole(); // "patient" | "self"
 
   const initials = useMemo(() => {
     const parts = displayName.split(" ").filter(Boolean);
@@ -24,7 +28,7 @@ export default function PatientProfile() {
             <Text style={styles.avatarText}>{initials}</Text>
           </View>
           <Text style={styles.name}>{displayName}</Text>
-          <Text style={styles.role}>Patient</Text>
+          <Text style={styles.role}>{role === "self" ? "Individual" : "Patient"}</Text>
         </View>
 
         {/* Info rows */}
@@ -39,18 +43,19 @@ export default function PatientProfile() {
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Role</Text>
-            <Text style={styles.infoValue}>Patient</Text>
+            <Text style={styles.infoValue}>
+              {role === "self" ? "Individual" : "Patient"}
+            </Text>
           </View>
 
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Caregiver</Text>
-            <Text style={styles.infoValue}>Assigned</Text>
-          </View>
-
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Medications</Text>
-            <Text style={styles.infoValue}>3 active</Text>
-          </View>
+          {role === "patient" && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Caregiver Code</Text>
+              <Text style={styles.infoValue}>
+                {linkedCode ?? "Not linked"}
+              </Text>
+            </View>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
