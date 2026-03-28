@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import {
   Alert,
   ImageBackground,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
@@ -10,6 +9,7 @@ import {
   Pressable,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import BG from "../assets/pills/pill8.jpg";
 
@@ -96,59 +96,69 @@ export default function Login() {
     >
       <View style={styles.overlay} />
 
-      <SafeAreaView style={styles.container}>
-        <View style={styles.card}>
-          {/* Title */}
-          <View style={styles.headerContainer}>
-            <Text style={styles.title}>PillTek</Text>
-            <Text style={styles.subtitle}>
-              Sign in to manage your medications and care.
-            </Text>
-          </View>
-
-          {/* Email */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your email"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-          </View>
-
-          {/* Password */}
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your password"
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-            />
-          </View>
-
-          {/* Login Button */}
-          <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
-            <Text style={styles.loginText}>Login</Text>
+      <SafeAreaView style={styles.safe}>
+        {/* Back button row — same vertical position as dashboard header rows */}
+        <View style={styles.backRow}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => router.replace("/")}>
+            <Text style={styles.backBtnText}>← Back</Text>
           </TouchableOpacity>
+        </View>
 
-          {/* Forgot password */}
-          <Pressable
-            onPress={() => router.push("/forgot-password")}
-            style={{ marginTop: 12 }}
-          >
-            <Text style={{ textAlign: "center" }}>Forgot password?</Text>
-          </Pressable>
+        {/* Centered card */}
+        <View style={styles.container}>
+          <View style={styles.card}>
+            {/* Title */}
+            <View style={styles.headerContainer}>
+              <Text style={styles.title}>PillTek</Text>
+              <Text style={styles.subtitle}>
+                Sign in to manage your medications and care.
+              </Text>
+            </View>
 
-          {/* Links */}
-          <View style={styles.linksContainer}>
-            <TouchableOpacity onPress={() => router.push("/create-account")}>
-              <Text style={styles.linkText}>Create account</Text>
+            {/* Email */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Email</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter your email"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            {/* Password */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Password</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter your password"
+                secureTextEntry
+                value={password}
+                onChangeText={setPassword}
+              />
+            </View>
+
+            {/* Login Button */}
+            <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
+              <Text style={styles.loginText}>Login</Text>
             </TouchableOpacity>
+
+            {/* Forgot password */}
+            <Pressable
+              onPress={() => router.push("/forgot-password")}
+              style={{ marginTop: 12 }}
+            >
+              <Text style={{ textAlign: "center" }}>Forgot password?</Text>
+            </Pressable>
+
+            {/* Links */}
+            <View style={styles.linksContainer}>
+              <TouchableOpacity onPress={() => router.push("/create-account")}>
+                <Text style={styles.linkText}>Create account</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </SafeAreaView>
@@ -164,6 +174,26 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(255,255,255,0.10)",
   },
+  safe: {
+    flex: 1,
+  },
+  // Back button sits at the top in natural flow — same height as dashboard header rows
+  backRow: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 4,
+  },
+  backBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    alignSelf: "flex-start",
+  },
+  backBtnText: {
+    fontSize: 16,
+    color: "#366a53ff",
+    fontWeight: "600",
+  },
+  // Remaining space fills and centers the card
   container: {
     flex: 1,
     justifyContent: "center",

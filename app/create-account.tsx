@@ -10,7 +10,7 @@ import {
   ScrollView,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import { getRole } from "./role-store";
 import { setLinkedCaregiverCode } from "./patient-store";
@@ -58,15 +58,10 @@ export default function CreateAccount() {
         setLinkedCaregiverCode(linkCode.trim().toUpperCase());
       }
 
-      // Route based on role
-      if (role === "caregiver") {
-        router.replace("/home");
-      } else if (role === "self") {
-        router.replace("/self-home");
-      } else {
-        // patient
-        router.replace("/patient-home");
-      }
+      // Send a verification email and take the user to the verification screen.
+      // verify-email.js will redirect to the correct dashboard once verified.
+      await sendEmailVerification(userCredential.user);
+      router.replace("/verify-email");
     } catch (error: any) {
       Alert.alert("Sign up failed", error.code || "Unknown error");
       console.log("SIGNUP ERROR:", error);

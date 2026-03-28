@@ -6,6 +6,7 @@ export default function Layout() {
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="login" options={{ headerShown: false }} />
       <Stack.Screen name="create-account" options={{ title: "Create Account" }} />
+      <Stack.Screen name="verify-email" options={{ headerShown: false }} />
       <Stack.Screen name="forgot-password" options={{ title: "Reset Password" }} />
       <Stack.Screen name="home" options={{ headerShown: false }} />
       <Stack.Screen name="patient-home" options={{ headerShown: false }} />

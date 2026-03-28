@@ -17,6 +17,13 @@ import { auth } from "../firebaseConfig";
 import DashboardRow from "../components/DashboardRow";
 import { getPatientMedications } from "./medication-store";
 
+// Defined outside the component so the reference is stable across renders.
+const MOCK_MEDICATIONS = [
+  { id: "1", name: "Metformin 500mg",   time: "8:00 AM",  status: "Taken" },
+  { id: "2", name: "Lisinopril 10mg",   time: "12:00 PM", status: "Taken" },
+  { id: "3", name: "Atorvastatin 20mg", time: "8:00 PM",  status: "Pending" },
+];
+
 export default function PatientHome() {
   const router = useRouter();
 
@@ -27,24 +34,37 @@ export default function PatientHome() {
     return "Patient";
   }, []);
 
-  const MOCK_MEDICATIONS = [
-    { id: "1", name: "Metformin 500mg", time: "8:00 AM" },
-    { id: "2", name: "Lisinopril 10mg", time: "12:00 PM" },
-    { id: "3", name: "Atorvastatin 20mg", time: "8:00 PM" },
-  ];
-
   const [medications, setMedications] = useState(MOCK_MEDICATIONS);
 
-  // Re-read from the store each time this screen gains focus so that
-  // medications entered during bottle setup appear immediately on return.
+  // Track the calendar date of the last load so we can reset statuses at midnight.
+  const [currentDateStr, setCurrentDateStr] = useState(() => new Date().toDateString());
+
+  // Re-read from the store each time this screen gains focus.
+  // If the calendar date has changed since the last load, all statuses are reset
+  // to "Pending" so the daily Taken / Missed / Remaining counts start fresh.
   useFocusEffect(
     useCallback(() => {
+      const today = new Date().toDateString();
       const stored = getPatientMedications();
-      if (stored.length > 0) {
-        setMedications(stored);
+
+      if (today !== currentDateStr) {
+        // New day — reset every medication status to Pending.
+        setCurrentDateStr(today);
+        const base = stored.length > 0 ? stored : MOCK_MEDICATIONS;
+        setMedications(base.map((m) => ({ ...m, status: "Pending" })));
+      } else {
+        // Same day — load stored meds as-is (status is preserved from last save).
+        if (stored.length > 0) {
+          setMedications(stored);
+        }
       }
-    }, [])
+    }, [currentDateStr])
   );
+
+  // Today's tracking counts — derived from current medications state only.
+  const takenCount     = medications.filter((m) => m.status === "Taken").length;
+  const missedCount    = medications.filter((m) => m.status === "Missed").length;
+  const remainingCount = medications.filter((m) => m.status === "Pending").length;
 
   const [menuVisible, setMenuVisible] = useState(false);
 
@@ -93,6 +113,22 @@ export default function PatientHome() {
           </TouchableOpacity>
         </View>
 
+        {/* Today's summary cards */}
+        <View style={styles.summaryRow}>
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryNum}>{takenCount}</Text>
+            <Text style={styles.summaryLabel}>Taken</Text>
+          </View>
+          <View style={styles.summaryCard}>
+            <Text style={[styles.summaryNum, missedCount > 0 && styles.missed]}>{missedCount}</Text>
+            <Text style={styles.summaryLabel}>Missed</Text>
+          </View>
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryNum}>{remainingCount}</Text>
+            <Text style={styles.summaryLabel}>Remaining</Text>
+          </View>
+        </View>
+
         {/* Section label + divider */}
         <Text style={styles.sectionTitle}>medications</Text>
         <View style={styles.divider} />
@@ -124,13 +160,6 @@ export default function PatientHome() {
                 onPress={() => goMenu("/patient-profile")}
               >
                 <Text style={styles.menuText}>Profile</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => goMenu("/patient-medications")}
-              >
-                <Text style={styles.menuText}>My Medications</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -199,10 +228,27 @@ const styles = StyleSheet.create({
   menuBtn: { paddingHorizontal: 8, paddingVertical: 6 },
   menuIcon: { fontSize: 22, fontWeight: "700" },
 
+  summaryRow: { flexDirection: "row", gap: 12, marginTop: 20, marginBottom: 16 },
+  summaryCard: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: "center",
+    elevation: 1,
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  summaryNum: { fontSize: 28, fontWeight: "700", color: "#366a53" },
+  summaryLabel: { fontSize: 12, color: "#555", marginTop: 2 },
+  missed: { color: "#c0392b" },
+
   sectionTitle: {
     fontSize: 24,
     fontWeight: "600",
-    marginTop: 24,
+    marginTop: 0,
     marginBottom: 10,
   },
   divider: {

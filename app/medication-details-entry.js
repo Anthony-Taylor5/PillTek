@@ -50,7 +50,7 @@ function formatTimeString(hour, minute, period) {
 }
 
 const HOURS   = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-const MINUTES = [0, 15, 30, 45];
+const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -322,11 +322,15 @@ export default function MedicationDetailsEntry() {
 
             {/* Minute row */}
             <Text style={styles.timeSection}>Minute</Text>
-            <View style={styles.minuteRow}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.hourRow}
+            >
               {MINUTES.map((m) => (
                 <TouchableOpacity
                   key={m}
-                  style={[styles.unitBtn, styles.minuteBtn, pickerMinute === m && styles.unitBtnSelected]}
+                  style={[styles.unitBtn, pickerMinute === m && styles.unitBtnSelected]}
                   onPress={() => setPickerMinute(m)}
                 >
                   <Text style={[styles.unitBtnText, pickerMinute === m && styles.unitBtnTextSelected]}>
@@ -334,7 +338,7 @@ export default function MedicationDetailsEntry() {
                   </Text>
                 </TouchableOpacity>
               ))}
-            </View>
+            </ScrollView>
 
             {/* AM/PM row */}
             <Text style={styles.timeSection}>Period</Text>
