@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="cam_and_server_code.ino">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/working_server/cam_and_server_code.ino.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
