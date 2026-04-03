@@ -3,7 +3,7 @@ import { View, Text, FlatList, StyleSheet } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import DashboardRow from "../components/DashboardRow";
-import { getPatientMedications } from "./medication-store";
+import { getPatientMedications } from "../lib/medication-store";
 
 const MOCK_MEDICATIONS = [
   { id: "1", name: "Metformin 500mg", time: "8:00 AM", status: "Taken" },

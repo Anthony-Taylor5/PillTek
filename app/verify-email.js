@@ -11,7 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { sendEmailVerification, reload } from "firebase/auth";
 import { auth } from "../firebaseConfig";
-import { getRole } from "./role-store";
+import { getRole } from "../lib/role-store";
 
 export default function VerifyEmail() {
   const router = useRouter();

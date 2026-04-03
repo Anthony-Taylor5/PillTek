@@ -15,7 +15,8 @@ import { useFocusEffect } from "expo-router";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import DashboardRow from "../components/DashboardRow";
-import { getPatientMedications } from "./medication-store";
+import { getPatientMedications } from "../lib/medication-store";
+import { fetchPatientByUid, fetchMedications } from "../lib/api";
 
 // Defined outside the component so the reference is stable across renders.
 const MOCK_MEDICATIONS = [
@@ -35,29 +36,40 @@ export default function PatientHome() {
   }, []);
 
   const [medications, setMedications] = useState(MOCK_MEDICATIONS);
-
-  // Track the calendar date of the last load so we can reset statuses at midnight.
   const [currentDateStr, setCurrentDateStr] = useState(() => new Date().toDateString());
 
-  // Re-read from the store each time this screen gains focus.
-  // If the calendar date has changed since the last load, all statuses are reset
-  // to "Pending" so the daily Taken / Missed / Remaining counts start fresh.
+  // Re-read medications each time this screen gains focus.
+  // Priority: Supabase (persisted) > session store > MOCK_MEDICATIONS.
+  // Resets all statuses to Pending when the calendar date rolls over.
   useFocusEffect(
     useCallback(() => {
       const today = new Date().toDateString();
-      const stored = getPatientMedications();
+      const isNewDay = today !== currentDateStr;
+      if (isNewDay) setCurrentDateStr(today);
 
-      if (today !== currentDateStr) {
-        // New day — reset every medication status to Pending.
-        setCurrentDateStr(today);
-        const base = stored.length > 0 ? stored : MOCK_MEDICATIONS;
-        setMedications(base.map((m) => ({ ...m, status: "Pending" })));
-      } else {
-        // Same day — load stored meds as-is (status is preserved from last save).
-        if (stored.length > 0) {
-          setMedications(stored);
-        }
-      }
+      const uid = auth.currentUser?.uid;
+      if (!uid) return;
+
+      fetchPatientByUid(uid)
+        .then((patient) => {
+          if (!patient) {
+            // Not linked to a patient record yet — fall back to session / mock data.
+            const stored = getPatientMedications();
+            const base   = stored.length > 0 ? stored : MOCK_MEDICATIONS;
+            setMedications(isNewDay ? base.map((m) => ({ ...m, status: "Pending" })) : base);
+            return;
+          }
+          return fetchMedications(patient.id).then((dbMeds) => {
+            const base = dbMeds.length > 0 ? dbMeds : MOCK_MEDICATIONS;
+            setMedications(isNewDay ? base.map((m) => ({ ...m, status: "Pending" })) : base);
+          });
+        })
+        .catch((err) => {
+          console.warn('[patient-home] fetch failed:', err);
+          const stored = getPatientMedications();
+          const base   = stored.length > 0 ? stored : MOCK_MEDICATIONS;
+          setMedications(isNewDay ? base.map((m) => ({ ...m, status: "Pending" })) : base);
+        });
     }, [currentDateStr])
   );
 

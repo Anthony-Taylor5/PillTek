@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Modal,
   Pressable,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -14,7 +15,8 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import DashboardRow from "../components/DashboardRow";
-import { getPatients } from "./patient-store";
+import { getPatients } from "../lib/patient-store";
+import { fetchPatients } from "../lib/api";
 
 export default function Home() {
   const router = useRouter();
@@ -27,12 +29,38 @@ export default function Home() {
   }, []);
 
   const [patients, setPatients] = useState(getPatients());
+  const [loading, setLoading]   = useState(false);
 
-  // Refresh the patient list each time this screen gains focus so that
-  // newly added patients (from add-patient.js) appear immediately on return.
+  // Refresh the patient list each time this screen gains focus.
+  // Prefers Supabase data (persists across sessions); falls back to the
+  // in-memory session store (populated by add-patient.js this session).
   useFocusEffect(
     useCallback(() => {
-      setPatients(getPatients());
+      const uid = auth.currentUser?.uid;
+      if (!uid) return;
+
+      setLoading(true);
+      fetchPatients(uid)
+        .then((dbRows) => {
+          if (dbRows.length > 0) {
+            // Normalize DB row shape to match what the rest of the UI expects.
+            setPatients(dbRows.map((r) => ({
+              id:          r.id,
+              name:        r.name,
+              patientCode: r.patient_code,
+              dob:         r.dob   ?? '',
+              phone:       r.phone ?? '',
+            })));
+          } else {
+            // No DB records yet (e.g., Supabase not configured) — use session store.
+            setPatients(getPatients());
+          }
+        })
+        .catch((err) => {
+          console.warn('[home] fetchPatients failed:', err);
+          setPatients(getPatients());
+        })
+        .finally(() => setLoading(false));
     }, [])
   );
 
@@ -91,6 +119,7 @@ export default function Home() {
         <View style={styles.divider} />
 
         {/* Patient list */}
+        {loading && <ActivityIndicator color="#366a53" style={{ marginTop: 20 }} />}
         <FlatList
           data={patients}
           keyExtractor={(item) => item.id}

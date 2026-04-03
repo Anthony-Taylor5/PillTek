@@ -8,7 +8,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
-import { getPatientMedications, getCaregiverPatientMeds } from "./medication-store";
+import { getPatientMedications, getCaregiverPatientMeds } from "../lib/medication-store";
 import {
   buildCalendarGrid,
   isScheduledOn,
@@ -17,7 +17,7 @@ import {
   daysUntilRefill,
   MONTH_NAMES,
   DAY_HEADERS,
-} from "./schedule-utils";
+} from "../lib/schedule-utils";
 
 // ── Mock medications ──────────────────────────────────────────────────────────
 // Used when no real store data is available (patient hasn't done bottle setup yet).

@@ -12,8 +12,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { setLastCompletedMed } from "./med-detail-store";
-import { REFILL_OPTIONS } from "./schedule-utils";
+import { setLastCompletedMed } from "../lib/med-detail-store";
+import { REFILL_OPTIONS } from "../lib/schedule-utils";
 
 // ── Frequency options ────────────────────────────────────────────────────────
 

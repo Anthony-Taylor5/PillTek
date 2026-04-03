@@ -41,8 +41,7 @@ export default function Layout() {
         options={{ title: "Capture Bottles", headerBackVisible: false }}
       />
 
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="modal" options={{ presentation: "modal" }} />
+<Stack.Screen name="modal" options={{ presentation: "modal" }} />
     </Stack>
   );
 }

@@ -1,26 +1,26 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   Alert,
-  Image,
-  ScrollView,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { CameraView, useCameraPermissions } from "expo-camera";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { auth } from "../firebaseConfig";
 import {
   setPatientMedications,
   setCaregiverPatientMeds,
   nameToMedObject,
-} from "./medication-store";
+} from "../lib/medication-store";
+import { createMedications, fetchPatientByUid } from "../lib/api";
 
-const PHOTOS_PER_MED = 6;
+const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:5000";
+const TOTAL_CAPTURES = 24;
+const POLL_INTERVAL_MS = 1500;
 
-// Produces a safe filename segment: lowercase, spaces→underscores, strip non-alphanumeric
 function sanitize(str) {
   return String(str)
     .toLowerCase()
@@ -29,71 +29,85 @@ function sanitize(str) {
     .replace(/[^a-z0-9_]/g, "");
 }
 
-// Extracts the display name from a medication entry that may be either a plain
-// string (patient self-setup flow) or a full object (caregiver add-patient flow).
 function getMedName(med) {
   return typeof med === "object" && med !== null ? (med.name ?? "") : String(med ?? "");
 }
 
 export default function CaptureBottles() {
   const router = useRouter();
-  const { patientName, medications: medsParam, returnTo, returnParams, returnMode } = useLocalSearchParams();
+  const { patientId, patientName, medications: medsParam, returnTo, returnParams, returnMode } = useLocalSearchParams();
   const medications = JSON.parse(medsParam || "[]");
 
-  const [permission, requestPermission] = useCameraPermissions();
-  const [medIndex, setMedIndex] = useState(0);
-  // Keyed by medication name string (not the full object)
-  const [capturedPhotos, setCapturedPhotos] = useState({});
-  const [capturing, setCapturing] = useState(false);
-  const cameraRef = useRef(null);
+  const [medIndex, setMedIndex]       = useState(0);
+  const [sessionId, setSessionId]     = useState(null);
+  const [capturesDone, setCapturesDone] = useState(0);
+  const [sessionStatus, setSessionStatus] = useState("idle"); // idle | starting | running | done | error
+  const pollRef = useRef(null);
 
-  const usernameSafe = sanitize(patientName || auth.currentUser?.displayName || "patient");
   const currentMedName = getMedName(medications[medIndex] ?? "");
-  const currentMedPhotos = capturedPhotos[currentMedName] ?? [];
-  const photoCount = currentMedPhotos.length;
-  const allPhotosDone = photoCount >= PHOTOS_PER_MED;
-  const isLastMed = medIndex === medications.length - 1;
+  const isLastMed      = medIndex === medications.length - 1;
+  const progress       = Math.min(capturesDone / TOTAL_CAPTURES, 1);
 
-  const handleTakePhoto = async () => {
-    if (!cameraRef.current || allPhotosDone || capturing) return;
-    setCapturing(true);
+  // Stop polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const startCapture = async () => {
+    setSessionStatus("starting");
+    setCapturesDone(0);
+    setSessionId(null);
+
+    const className = `${sanitize(patientName || auth.currentUser?.displayName || "patient")}_${sanitize(currentMedName)}`;
+
     try {
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.8,
-        skipProcessing: true,
+      const res  = await fetch(`${BACKEND_URL}/start-capture`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ class_name: className }),
       });
-      const medSafe = sanitize(currentMedName);
-      const index = photoCount + 1;
-      // Filename pattern: username_medicationname_# (no extension stored — URI carries that)
-      const filename = `${usernameSafe}_${medSafe}_${index}`;
-      setCapturedPhotos((prev) => ({
-        ...prev,
-        [currentMedName]: [...(prev[currentMedName] ?? []), { filename, uri: photo.uri }],
-      }));
-    } catch {
-      Alert.alert("Error", "Could not capture photo. Please try again.");
-    } finally {
-      setCapturing(false);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to start capture");
+
+      setSessionId(data.session_id);
+      setSessionStatus("running");
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const r    = await fetch(`${BACKEND_URL}/capture-status/${data.session_id}`);
+          const s    = await r.json();
+          setCapturesDone(s.captures_done ?? 0);
+          if (s.status === "done" || s.status === "error") {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            setSessionStatus(s.status);
+          }
+        } catch {
+          // network blip — keep polling
+        }
+      }, POLL_INTERVAL_MS);
+    } catch (err) {
+      setSessionStatus("error");
+      Alert.alert("Error", err.message ?? "Could not start capture session.");
     }
   };
 
   const handleNext = () => {
     if (!isLastMed) {
       setMedIndex((i) => i + 1);
+      setSessionStatus("idle");
+      setCapturesDone(0);
+      setSessionId(null);
     } else {
       finishCapture();
     }
   };
 
-  const finishCapture = () => {
-    // Build medication objects in the shape the rest of the app uses.
-    // If the caregiver flow passed full objects (name + dosage + frequency + time + refill),
-    // preserve those fields. Otherwise create minimal objects from plain name strings
-    // (patient self-setup path via medication-entry.js).
+  const finishCapture = async () => {
     const medObjects = medications.map((med, i) => {
       if (typeof med === "object" && med !== null) {
-        // Full object from caregiver flow — preserve all fields including
-        // times array and addedAt so the calendar can use them.
         return {
           id:        `setup_${i}`,
           name:      med.name      ?? "",
@@ -106,51 +120,42 @@ export default function CaptureBottles() {
           status:    med.status    ?? "Pending",
         };
       }
-      // Plain name string from patient flow
       return nameToMedObject(med, i);
     });
 
-    // Write into the shared store so medication screens update on next focus
     if (returnTo === "/patient-home") {
-      // Patient self-setup flow: update the patient's own medication list
       setPatientMedications(medObjects);
     } else {
-      // Caregiver add-patient flow: store under the patient's name so
-      // patient-detail can look it up when the ID-based mock lookup misses
       setCaregiverPatientMeds(patientName, medObjects);
     }
 
-    // Package all data cleanly for database submission
-    const payload = {
-      patientName,
-      userId: auth.currentUser?.uid ?? null,
-      capturedAt: new Date().toISOString(),
-      medications: medications.map((med) => {
-        const name = getMedName(med);
-        return {
-          name,
-          ...(typeof med === "object" && med !== null
-            ? { dosage: med.dosage, frequency: med.frequency, time: med.time, refill: med.refill }
-            : {}),
-          photos: (capturedPhotos[name] ?? []).map(({ filename, uri }) => ({
-            filename,    // e.g. "ahmad_metformin_1"
-            localUri: uri, // upload to Firebase Storage / S3 here
-          })),
-        };
-      }),
-    };
+    // Persist medications to Supabase (photos are managed by the Python training pipeline)
+    let patientUuid = null;
+    const uid = auth.currentUser?.uid ?? null;
 
-    // TODO: Upload localUri files to Firebase Storage and save payload to Firestore
-    console.log("[CaptureBottles] Payload ready for DB:", JSON.stringify(payload, null, 2));
+    try {
+      if (returnTo === "/patient-home" && uid) {
+        const rec = await fetchPatientByUid(uid);
+        patientUuid = rec?.id ?? null;
+      } else if (patientId && String(patientId).includes("-")) {
+        patientUuid = patientId;
+      }
+
+      if (patientUuid) {
+        await createMedications(patientUuid, medObjects);
+        console.log("[CaptureBottles] Medications saved to Supabase.");
+      } else {
+        console.warn("[CaptureBottles] No patient UUID — session store only.");
+      }
+    } catch (dbErr) {
+      console.warn("[CaptureBottles] Supabase persist failed:", dbErr);
+    }
 
     Alert.alert(
       "Setup complete",
-      `Bottle photos captured for ${medications.length} medication${medications.length !== 1 ? "s" : ""}.`,
+      `Bottle capture complete for ${medications.length} medication${medications.length !== 1 ? "s" : ""}.`,
       [{ text: "Done", onPress: () => {
         if (returnMode === "back") {
-          // add-medication used router.replace to get here, so the stack is
-          // [... , patient-detail, capture-bottles]. router.back() pops to patient-detail
-          // cleanly without leaving add-medication in the history.
           router.back();
         } else if (returnParams) {
           router.replace({ pathname: returnTo || "/home", params: JSON.parse(returnParams) });
@@ -161,7 +166,6 @@ export default function CaptureBottles() {
     );
   };
 
-  // No medications passed
   if (medications.length === 0) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -175,191 +179,194 @@ export default function CaptureBottles() {
     );
   }
 
-  // Permissions not yet resolved
-  if (!permission) return <View style={styles.safe} />;
-
-  // Permission denied
-  if (!permission.granted) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.centered}>
-          <Text style={styles.bodyText}>
-            Camera access is required to photograph your medication bottles.
-          </Text>
-          <TouchableOpacity style={styles.btn} onPress={requestPermission}>
-            <Text style={styles.btnText}>Allow Camera</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const captureReady  = sessionStatus === "idle" || sessionStatus === "error";
+  const captureActive = sessionStatus === "starting" || sessionStatus === "running";
+  const captureDone   = sessionStatus === "done";
 
   return (
-    <View style={styles.cameraContainer}>
-      <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.container}>
 
-      {/* Top bar — medication name + step counter */}
-      <SafeAreaView style={styles.topOverlay} edges={["top"]}>
-        <View style={styles.topBar}>
-          <Text style={styles.medName} numberOfLines={1}>
-            {currentMedName}
-          </Text>
-          <Text style={styles.stepLabel}>
-            Medication {medIndex + 1} of {medications.length}
-          </Text>
-        </View>
-      </SafeAreaView>
-
-      {/* Bottom controls */}
-      <View style={styles.bottomOverlay}>
-        {/* Thumbnail strip — one slot per required photo */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.thumbnailRow}
-        >
-          {Array.from({ length: PHOTOS_PER_MED }).map((_, i) => {
-            const photo = currentMedPhotos[i];
-            return (
-              <View
-                key={i}
-                style={[styles.thumb, photo ? styles.thumbDone : styles.thumbEmpty]}
-              >
-                {photo ? (
-                  <Image source={{ uri: photo.uri }} style={styles.thumbImage} />
-                ) : (
-                  <Text style={styles.thumbNum}>{i + 1}</Text>
-                )}
-              </View>
-            );
-          })}
-        </ScrollView>
-
-        <Text style={styles.counterText}>
-          {allPhotosDone ? "All 6 photos captured" : `${photoCount} / ${PHOTOS_PER_MED} photos`}
+        {/* Step indicator */}
+        <Text style={styles.stepLabel}>
+          Medication {medIndex + 1} of {medications.length}
         </Text>
 
-        {!allPhotosDone ? (
-          <TouchableOpacity
-            style={[styles.shutterBtn, capturing && styles.shutterBtnDisabled]}
-            onPress={handleTakePhoto}
-            disabled={capturing}
-            activeOpacity={0.7}
-          >
-            <View style={styles.shutterInner} />
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity style={styles.btn} onPress={handleNext}>
-            <Text style={styles.btnText}>
-              {isLastMed ? "Finish" : "Next Medication"}
+        {/* Medication name card */}
+        <View style={styles.medCard}>
+          <Text style={styles.medName} numberOfLines={2}>{currentMedName}</Text>
+        </View>
+
+        {/* Instructions */}
+        <View style={styles.instructionBox}>
+          <Text style={styles.instructionTitle}>Desktop Capture Required</Text>
+          <Text style={styles.instructionText}>
+            Bottle photos are taken using the ESP32 camera and the desktop capture tool.
+            Press <Text style={styles.bold}>Start Capture</Text> below, then complete the
+            session on the desktop window that opens.
+          </Text>
+          <Text style={styles.instructionText}>
+            Rotate the bottle every 15° and press <Text style={styles.bold}>SPACE</Text> to
+            capture each of the {TOTAL_CAPTURES} required photos.
+          </Text>
+        </View>
+
+        {/* Progress bar */}
+        {(captureActive || captureDone) && (
+          <View style={styles.progressSection}>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+            </View>
+            <Text style={styles.progressText}>
+              {captureDone
+                ? `All ${TOTAL_CAPTURES} photos captured`
+                : `${capturesDone} / ${TOTAL_CAPTURES} photos`}
             </Text>
-          </TouchableOpacity>
+          </View>
         )}
+
+        {/* Error message */}
+        {sessionStatus === "error" && (
+          <Text style={styles.errorText}>
+            Capture failed. Make sure the backend server is running and try again.
+          </Text>
+        )}
+
+        {/* Action buttons */}
+        <View style={styles.actions}>
+          {captureReady && (
+            <TouchableOpacity style={styles.btn} onPress={startCapture}>
+              <Text style={styles.btnText}>Start Capture</Text>
+            </TouchableOpacity>
+          )}
+
+          {captureActive && (
+            <View style={styles.waitingRow}>
+              <ActivityIndicator color="#366a53" size="small" />
+              <Text style={styles.waitingText}>Waiting for desktop capture…</Text>
+            </View>
+          )}
+
+          {captureDone && (
+            <TouchableOpacity style={styles.btn} onPress={handleNext}>
+              <Text style={styles.btnText}>
+                {isLastMed ? "Finish" : "Next Medication"}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#e8f5e9" },
+  safe:      { flex: 1, backgroundColor: "#e8f5e9" },
+  container: { flex: 1, padding: 24, alignItems: "center", justifyContent: "center" },
 
-  cameraContainer: { flex: 1, backgroundColor: "#000" },
-  camera: { flex: 1 },
-
-  // Top overlay sits above the camera
-  topOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-  },
-  topBar: {
-    backgroundColor: "rgba(0,0,0,0.55)",
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  medName: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#fff",
-    textAlign: "center",
-  },
   stepLabel: {
     fontSize: 13,
-    color: "rgba(255,255,255,0.7)",
-    marginTop: 3,
-  },
-
-  // Bottom overlay sits below the camera
-  bottomOverlay: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "rgba(0,0,0,0.60)",
-    paddingBottom: 44,
-    paddingTop: 16,
-    alignItems: "center",
-  },
-
-  thumbnailRow: {
-    paddingHorizontal: 16,
+    color: "#666",
     marginBottom: 12,
-  },
-  thumb: {
-    width: 46,
-    height: 46,
-    borderRadius: 6,
-    marginRight: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1.5,
-    overflow: "hidden",
-  },
-  thumbEmpty: {
-    borderColor: "rgba(255,255,255,0.35)",
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  thumbDone: {
-    borderColor: "#4caf50",
-  },
-  thumbImage: { width: "100%", height: "100%" },
-  thumbNum: { color: "rgba(255,255,255,0.45)", fontSize: 13 },
-
-  counterText: {
-    color: "#fff",
-    fontSize: 14,
-    opacity: 0.85,
-    marginBottom: 20,
+    letterSpacing: 0.5,
   },
 
-  // Shutter button — large circle
-  shutterBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: "rgba(255,255,255,0.25)",
-    borderWidth: 3,
-    borderColor: "#fff",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  shutterBtnDisabled: { opacity: 0.35 },
-  shutterInner: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+  medCard: {
     backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    width: "100%",
+    alignItems: "center",
+    marginBottom: 24,
+    shadowColor: "#000",
+    shadowOpacity: 0.07,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  medName: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    textAlign: "center",
   },
 
+  instructionBox: {
+    backgroundColor: "#f0faf4",
+    borderRadius: 10,
+    padding: 16,
+    width: "100%",
+    marginBottom: 28,
+    borderLeftWidth: 3,
+    borderLeftColor: "#366a53",
+  },
+  instructionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#366a53",
+    marginBottom: 8,
+  },
+  instructionText: {
+    fontSize: 13,
+    color: "#444",
+    lineHeight: 20,
+    marginBottom: 6,
+  },
+  bold: { fontWeight: "700" },
+
+  progressSection: {
+    width: "100%",
+    marginBottom: 24,
+    alignItems: "center",
+  },
+  progressTrack: {
+    width: "100%",
+    height: 8,
+    backgroundColor: "#d0e8d8",
+    borderRadius: 4,
+    overflow: "hidden",
+    marginBottom: 8,
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: "#366a53",
+    borderRadius: 4,
+  },
+  progressText: {
+    fontSize: 13,
+    color: "#555",
+  },
+
+  errorText: {
+    fontSize: 13,
+    color: "#c0392b",
+    textAlign: "center",
+    marginBottom: 16,
+  },
+
+  actions: {
+    width: "100%",
+    alignItems: "center",
+  },
   btn: {
     backgroundColor: "#366a53",
     paddingVertical: 14,
-    paddingHorizontal: 36,
+    paddingHorizontal: 40,
     borderRadius: 8,
   },
   btnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+
+  waitingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  waitingText: {
+    fontSize: 14,
+    color: "#555",
+  },
 
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28 },
   bodyText: {

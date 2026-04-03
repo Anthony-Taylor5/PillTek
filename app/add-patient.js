@@ -11,7 +11,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { generatePatientCode, addPatient } from "./patient-store";
+import { generatePatientCode, addPatient } from "../lib/patient-store";
+import { auth } from "../firebaseConfig";
+import { createPatient } from "../lib/api";
 
 export default function AddPatient() {
   const router = useRouter();
@@ -23,18 +25,42 @@ export default function AddPatient() {
   // Patient code is generated once on mount and stays stable across re-renders.
   const patientCode = useRef(generatePatientCode());
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!name.trim()) {
       Alert.alert("Missing info", "Please enter the patient's name.");
       return;
     }
 
-    // Register the patient in the session store so home.js shows them immediately.
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      Alert.alert("Error", "You must be signed in to add a patient.");
+      return;
+    }
+
+    // Persist to Supabase first so the record survives across sessions.
+    let dbPatient = null;
+    try {
+      dbPatient = await createPatient({
+        caregiverUid: uid,
+        name:        name.trim(),
+        dob:         dob.trim(),
+        phone:       phone.trim(),
+        patientCode: patientCode.current,
+      });
+    } catch (err) {
+      console.warn('[add-patient] createPatient failed:', err);
+      // Fall through: still register in session store so the UI works this session.
+    }
+
+    // Also register in the in-memory session store so home.js updates immediately
+    // without needing to wait for the next Supabase fetch.
     addPatient({
-      name: name.trim(),
-      dob: dob.trim(),
-      phone: phone.trim(),
+      name:        name.trim(),
+      dob:         dob.trim(),
+      phone:       phone.trim(),
       patientCode: patientCode.current,
+      // Use the DB-assigned UUID when available so patient-detail can query meds.
+      ...(dbPatient ? { id: dbPatient.id } : {}),
     });
 
     Alert.alert(

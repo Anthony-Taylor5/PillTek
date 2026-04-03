@@ -14,7 +14,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import DashboardRow from "../components/DashboardRow";
-import { getCaregiverPatientMeds } from "./medication-store";
+import { getCaregiverPatientMeds } from "../lib/medication-store";
 
 // Self-managed home — mirrors the caregiver home (home.js) exactly in structure
 // and interaction style, but manages the user's own medications instead of a

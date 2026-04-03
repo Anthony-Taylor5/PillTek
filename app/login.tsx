@@ -18,7 +18,7 @@ import {
   signInWithEmailAndPassword,
 } from "firebase/auth";
 import { auth } from "../firebaseConfig";
-import { getRole } from "./role-store";
+import { getRole } from "../lib/role-store";
 
 export default function Login() {
   const router = useRouter();

@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { getLastCompletedMed, clearLastCompletedMed } from "./med-detail-store";
+import { getLastCompletedMed, clearLastCompletedMed } from "../lib/med-detail-store";
 
 // Screen reached from the patient-detail 3-dot menu → "Add Medication".
 // Lets the caregiver add one or more medications for an existing patient,
@@ -68,6 +68,7 @@ export default function AddMedication() {
     router.replace({
       pathname: "/capture-bottles",
       params: {
+        patientId,          // UUID (or legacy integer ID) — used to persist meds to Supabase
         patientName,
         medications: JSON.stringify(medications),
         returnTo: "/patient-detail",

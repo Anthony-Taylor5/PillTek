@@ -1,15 +1,16 @@
 import React from "react";
 import {
   ImageBackground,
-  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import BG from "../assets/pills/pill8.jpg";
-import { setRole } from "./role-store";
+import { setRole } from "../lib/role-store";
+
 
 export default function RoleSelect() {
   const router = useRouter();

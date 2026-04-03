@@ -8,8 +8,8 @@ Usage:
     python capture_user_bottles.py --weights runs/detect/runs/train_v10/weights/best.pt
 
     #hotspot
-    python capture_user_bottles.py --weights runs/detect/runs/train_v10/weights/best.pt --source http://192.168.0.211:81/stream 
-   
+    python capture_user_bottles.py --weights runs/detect/runs/train_v10/weights/best.pt --source http://192.168.0.211:81/stream
+
     #home
     python capture_user_bottles.py --weights runs/detect/runs/train_v10/weights/best.pt --source http://192.168.0.31:81/stream
 

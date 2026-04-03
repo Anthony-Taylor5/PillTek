@@ -1,13 +1,15 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
   FlatList,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { fetchMedLogs } from "../lib/api";
 
 // Mock log history keyed by "patientId_medId"
 const MED_LOGS = {
@@ -87,12 +89,59 @@ function LogEntryRow({ entry, onPress }) {
   );
 }
 
+// Format a DB log row into the shape the UI components expect.
+function dbRowToEntry(row) {
+  const dateLabel = formatDateLabel(row.log_date);
+  const timeLabel = row.taken_at
+    ? new Date(row.taken_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '—';
+  return {
+    id:     row.id,
+    date:   dateLabel,
+    time:   timeLabel,
+    status: row.status ?? 'Pending',
+  };
+}
+
+function formatDateLabel(isoDate) {
+  if (!isoDate) return '—';
+  const d     = new Date(isoDate + 'T00:00:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff  = Math.round((today - d) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
 export default function MedLog() {
   const router = useRouter();
   const { patientId, patientName, medId, medName, medTime } = useLocalSearchParams();
 
-  const key = `${patientId}_${medId}`;
-  const entries = MED_LOGS[key] ?? [];
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // medId is a UUID when coming from a Supabase-backed patient-detail screen.
+    const isUuid = String(medId ?? '').includes('-');
+    if (!isUuid) {
+      // Legacy integer ID — use mock data.
+      const key = `${patientId}_${medId}`;
+      setEntries(MED_LOGS[key] ?? []);
+      return;
+    }
+
+    setLoading(true);
+    fetchMedLogs(medId)
+      .then((rows) => {
+        setEntries(rows.length > 0 ? rows.map(dbRowToEntry) : []);
+      })
+      .catch((err) => {
+        console.warn('[med-log] fetchMedLogs failed:', err);
+        setEntries([]);
+      })
+      .finally(() => setLoading(false));
+  }, [medId, patientId]);
 
   const takenCount  = entries.filter((e) => e.status === "Taken").length;
   const missedCount = entries.filter((e) => e.status === "Missed").length;
@@ -127,7 +176,8 @@ export default function MedLog() {
         <Text style={styles.sectionTitle}>history</Text>
         <View style={styles.divider} />
 
-        {entries.length === 0 ? (
+        {loading && <ActivityIndicator color="#366a53" style={{ marginTop: 20 }} />}
+        {!loading && entries.length === 0 ? (
           <Text style={styles.emptyText}>No log entries yet.</Text>
         ) : (
           <FlatList

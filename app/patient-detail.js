@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from "react";
-import { View, Text, FlatList, StyleSheet, TouchableOpacity, Modal, Pressable, Alert } from "react-native";
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, Modal, Pressable, Alert, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import DashboardRow from "../components/DashboardRow";
-import { getCaregiverPatientMeds } from "./medication-store";
-import { removePatient } from "./patient-store";
+import { getCaregiverPatientMeds } from "../lib/medication-store";
+import { removePatient } from "../lib/patient-store";
+import { fetchMedications } from "../lib/api";
 
 // Mock per-patient medication data for the three pre-seeded patients.
 const PATIENT_MEDS = {
@@ -39,12 +40,36 @@ export default function PatientDetail() {
 
   const [meds, setMeds]             = useState(() => buildMedList(id, name));
   const [menuVisible, setMenuVisible] = useState(false);
+  const [loading, setLoading]         = useState(false);
 
-  // Refresh the medication list each time this screen gains focus so that
-  // medications added through add-medication → capture-bottles appear immediately.
+  // Refresh the medication list each time this screen gains focus.
+  // If the patient id is a UUID (created via Supabase), fetch from DB.
+  // Otherwise fall back to the mock / session-store data for pre-seeded patients.
   useFocusEffect(
     useCallback(() => {
-      setMeds(buildMedList(id, name));
+      // UUIDs are 36 chars with hyphens; integer IDs ("1","2","3") are not.
+      const isUuid = String(id).includes('-');
+      if (!isUuid) {
+        setMeds(buildMedList(id, name));
+        return;
+      }
+
+      setLoading(true);
+      fetchMedications(id)
+        .then((dbMeds) => {
+          if (dbMeds.length > 0) {
+            setMeds(dbMeds);
+          } else {
+            // No DB records yet — show session-store meds (e.g., just added this session).
+            const sessionMeds = getCaregiverPatientMeds(name) ?? [];
+            setMeds(sessionMeds.length > 0 ? sessionMeds : buildMedList(id, name));
+          }
+        })
+        .catch((err) => {
+          console.warn('[patient-detail] fetchMedications failed:', err);
+          setMeds(buildMedList(id, name));
+        })
+        .finally(() => setLoading(false));
     }, [id, name])
   );
 
@@ -102,6 +127,7 @@ export default function PatientDetail() {
         {/* Medications */}
         <Text style={styles.sectionTitle}>medications</Text>
         <View style={styles.divider} />
+        {loading && <ActivityIndicator color="#366a53" style={{ marginTop: 16 }} />}
         <FlatList
           data={meds}
           keyExtractor={(item) => item.id}

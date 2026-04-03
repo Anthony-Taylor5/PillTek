@@ -11,6 +11,62 @@ import threading
 import queue
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
+import os
+import requests
+
+# ─── Backend event reporting ──────────────────────────────────────────────────
+# URL of the Flask backend server (backend/server.py).
+# Override with PILLTEK_BACKEND env var: e.g. http://192.168.0.152:5000
+_BACKEND_URL = os.environ.get('PILLTEK_BACKEND', 'http://127.0.0.1:5000')
+
+# Minimum seconds between consecutive POST requests for the same overlap event.
+# Prevents flooding the backend when a hand stays on a bottle.
+_EVENT_DEBOUNCE_SECS = 5.0
+
+# Maps YOLO class id → medication UUID in Supabase.
+# Populate this with real values from your 'medications' table once meds are created.
+# Example: CLASS_TO_MED_ID = { 1: "uuid-for-bottle-a", 2: "uuid-for-bottle-b" }
+CLASS_TO_MED_ID: dict[int, str] = {}
+
+_CLASS_NAMES_GLOBAL: list[str] = []          # set in run_infer after model load
+_last_event_time:    dict[int, float] = {}   # per-class debounce tracker
+
+
+def post_detection_event(event_type: str, bottle_class: int, confidence: float) -> None:
+    """
+    Fire-and-forget POST to the backend server.
+    Runs in a daemon thread so it never blocks the detection loop.
+    """
+    now = time.time()
+    last = _last_event_time.get(bottle_class, 0.0)
+    if now - last < _EVENT_DEBOUNCE_SECS:
+        return   # still within debounce window
+    _last_event_time[bottle_class] = now
+
+    label       = _CLASS_NAMES_GLOBAL[bottle_class] if bottle_class < len(_CLASS_NAMES_GLOBAL) else f'class_{bottle_class}'
+    med_id      = CLASS_TO_MED_ID.get(bottle_class)
+    payload     = {
+        'event_type':    event_type,
+        'bottle_class':  bottle_class,
+        'bottle_label':  label,
+        'confidence':    round(confidence, 4),
+        'raw_meta':      {'source': 'yolo_hand_detection'},
+    }
+    if med_id:
+        payload['medication_id'] = med_id
+
+    def _post():
+        try:
+            resp = requests.post(
+                f'{_BACKEND_URL}/detection-event',
+                json=payload,
+                timeout=3,
+            )
+            print(f'[Event] Posted {event_type} cls={bottle_class} → {resp.status_code}')
+        except Exception as e:
+            print(f'[Event] POST failed: {e}')
+
+    threading.Thread(target=_post, daemon=True).start()
 
 """
 Usage command:
@@ -405,9 +461,14 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
     pill_worker = PillWorker(pill_model, device, imgsz, conf)
     hand_worker = HandWorker(landmarker)
 
+    # Make class names available to the event-posting helper.
+    global _CLASS_NAMES_GLOBAL
+    _CLASS_NAMES_GLOBAL = class_names
+
     print(f"[INFO] Inference using: {weights}")
     print(f"[INFO] Source: {source}")
     print(f"[INFO] Classes: {class_names}")
+    print(f"[INFO] Backend: {_BACKEND_URL}")
     print("[INFO] Press 'q' to quit.")
 
     window_name = "Pill + Hand Detection"
@@ -442,6 +503,18 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
         draw_pill_boxes(frame, bottle_boxes, class_names)
         draw_hands(frame, hand_snap, bottle_boxes)
         draw_legend(frame, class_names)
+
+        # ── Report overlap events to the backend ──────────────────────────────
+        if hand_snap is not None and hand_snap.hand_landmarks and bottle_boxes:
+            for hi, hand_lms in enumerate(hand_snap.hand_landmarks):
+                if hand_overlaps_bottle(hi, hand_lms, bottle_boxes, frame.shape):
+                    # Find the highest-confidence overlapping bottle class.
+                    best_cls  = bottle_boxes[0][4]
+                    best_conf = bottle_boxes[0][5]
+                    for (_, _, _, _, cls, conf) in bottle_boxes:
+                        if conf > best_conf:
+                            best_cls, best_conf = cls, conf
+                    post_detection_event('hand_bottle_overlap', best_cls, best_conf)
 
         cv2.imshow(window_name, frame)
         if (cv2.waitKey(1) & 0xFF) == ord("q"):

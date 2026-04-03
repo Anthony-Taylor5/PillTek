@@ -2,8 +2,8 @@ import React, { useMemo } from "react";
 import { View, Text, StyleSheet, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth } from "../firebaseConfig";
-import { getLinkedCaregiverCode } from "./patient-store";
-import { getRole } from "./role-store";
+import { getLinkedCaregiverCode } from "../lib/patient-store";
+import { getRole } from "../lib/role-store";
 
 export default function PatientProfile() {
   const user = auth.currentUser;

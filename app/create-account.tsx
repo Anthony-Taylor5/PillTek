@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import {
   Alert,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
@@ -9,11 +8,13 @@ import {
   View,
   ScrollView,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
 import { auth } from "../firebaseConfig";
-import { getRole } from "./role-store";
-import { setLinkedCaregiverCode } from "./patient-store";
+import { getRole } from "../lib/role-store";
+import { setLinkedCaregiverCode } from "../lib/patient-store";
+import { upsertProfile, linkPatientByCode } from "../lib/api";
 
 export default function CreateAccount() {
   const router = useRouter();
@@ -48,14 +49,41 @@ export default function CreateAccount() {
         password
       );
 
-      await updateProfile(userCredential.user, {
-        displayName: `${firstName.trim()} ${lastName.trim()}`,
-      });
+      const displayName = `${firstName.trim()} ${lastName.trim()}`;
+      await updateProfile(userCredential.user, { displayName });
 
-      // If the patient entered a caregiver link code, save it to the session store.
-      // When the backend is wired, this is where you'd write the association to Firestore.
+      // Write the profile row to Supabase so caregivers and patients can be
+      // looked up by firebase_uid across sessions.
+      try {
+        await upsertProfile({
+          firebaseUid:  userCredential.user.uid,
+          displayName,
+          role,
+          phone:  phone.trim(),
+          email:  email.trim(),
+        });
+      } catch (dbErr) {
+        console.warn('[create-account] upsertProfile failed:', dbErr);
+      }
+
+      // Link the patient's Firebase UID to the caregiver's patient record.
       if (isPatient && linkCode.trim()) {
-        setLinkedCaregiverCode(linkCode.trim().toUpperCase());
+        setLinkedCaregiverCode(linkCode.trim().toUpperCase()); // keep session store in sync
+        try {
+          await linkPatientByCode({
+            patientFirebaseUid: userCredential.user.uid,
+            patientCode:        linkCode.trim().toUpperCase(),
+          });
+        } catch (linkErr) {
+          // Non-fatal: patient is still created in Firebase. The caregiver can
+          // re-share the code or the patient can re-link later.
+          console.warn('[create-account] linkPatientByCode failed:', linkErr);
+          Alert.alert(
+            'Linking warning',
+            'Account created, but the patient code could not be verified. ' +
+            'Ask your caregiver to confirm the code is correct.'
+          );
+        }
       }
 
       // Send a verification email and take the user to the verification screen.

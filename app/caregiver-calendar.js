@@ -8,8 +8,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
-import { getPatients } from "./patient-store";
-import { getCaregiverPatientMeds } from "./medication-store";
+import { getPatients } from "../lib/patient-store";
+import { getCaregiverPatientMeds } from "../lib/medication-store";
 import {
   buildCalendarGrid,
   isScheduledOn,
@@ -18,7 +18,7 @@ import {
   daysUntilRefill,
   MONTH_NAMES,
   DAY_HEADERS,
-} from "./schedule-utils";
+} from "../lib/schedule-utils";
 
 // ── Mock medication data for pre-seeded patients ──────────────────────────────
 // Provides frequency, times, refill, and addedAt fields that the calendar needs.
