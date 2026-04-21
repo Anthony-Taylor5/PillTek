@@ -319,10 +319,6 @@ export default function CaptureBottles() {
         {/* ── Camera feed / idle card ──────────────────────────────────────── */}
         {sessionStatus === "running" ? (
           <View style={styles.cameraContainer}>
-            {/* DIAG: bright probe to test if ANY child can paint here */}
-            <Text style={{ position: "absolute", top: 20, left: 20, color: "yellow", fontSize: 28, backgroundColor: "magenta", padding: 8, zIndex: 9999 }}>
-              DIAG PROBE
-            </Text>
             {frameUri ? (
               <>
                 <Image
@@ -529,15 +525,22 @@ const styles = StyleSheet.create({
   subLabel: { fontSize: 12, color: "#6a9a7a", letterSpacing: 0.4, textTransform: "uppercase" },
 
   // Camera
+  //
+  // NOTE: `overflow: "hidden"` is intentionally omitted. On Android with the
+  // New Architecture (Fabric), a View with both `borderRadius` and
+  // `overflow: "hidden"` clips *all* child rendering — the container paints
+  // its background but every child (Image, absolute overlays, text badges)
+  // becomes invisible even though UIAutomator reports the native views with
+  // correct bounds. The Image below carries its own `borderRadius`, so the
+  // live feed corners are still rounded without the parent clip.
   cameraContainer: {
     width: "100%",
     height: FEED_H,
-    // borderRadius: 16,                     // DIAG: temporarily off
+    borderRadius: 16,
     backgroundColor: "#0a1a0f",
     marginBottom: 16,
-    // overflow: "hidden",                   // DIAG: temporarily off
   },
-  cameraFeed: { width: "100%", borderRadius: 16, backgroundColor: "red" },
+  cameraFeed: { width: "100%", borderRadius: 16 },
   guideOverlay: {
     flex: 1,
     alignItems: "center",
