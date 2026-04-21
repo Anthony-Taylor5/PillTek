@@ -58,15 +58,23 @@ export default function CaptureBottles() {
   const [sessionStatus, setSessionStatus] = useState("idle");
   const [boxType, setBoxType]             = useState("tall");
   const [captureLoading, setCaptureLoading] = useState(false);
-  const [frameUri, setFrameUri]           = useState(null);
+  const [frameNum, setFrameNum]           = useState(0);
   const [frameLoadCount, setFrameLoadCount] = useState(0);
   const [frameError, setFrameError]       = useState(false);
-  const frameNumRef      = useRef(0);
-  const frameActiveRef   = useRef(false);
-  const sessionIdRef     = useRef(null);
+  const [fps, setFps]                     = useState(0);
   const connectTimeoutRef = useRef(null);
-  const safetyTimerRef   = useRef(null);
-  const lastB64Ref       = useRef("");
+  const retryTimeoutRef   = useRef(null);
+  const nextFrameTimerRef = useRef(null);
+  const lastLoadAtRef     = useRef(0);
+  const fpsWindowRef      = useRef([]);
+
+  // Cap the native decode loop at 30 fps. Without this, expo-image/Glide
+  // decodes frames as fast as it can fetch them — on a slow (emulator,
+  // software GPU) device the display can only composite ~0.7 fps, so every
+  // extra decoded bitmap gets thrown away before it ever paints. 30 fps
+  // gives plenty of headroom on real hardware while avoiding wasted decode
+  // work + GC churn on emulator.
+  const MIN_FRAME_INTERVAL_MS = 1000 / 30;
 
   const currentMedName = getMedName(medications[medIndex] ?? "");
   const isLastMed      = medIndex === medications.length - 1;
@@ -74,101 +82,39 @@ export default function CaptureBottles() {
   const progress       = Math.min(capturesDone / TOTAL_CAPTURES, 1);
   const selectedBox    = BOX_TYPES.find(b => b.key === boxType);
 
-  // Fetch each frame via JS fetch → arrayBuffer → btoa → data URI.
-  // Data URIs bypass Fresco's cleartext-HTTP restriction in Expo Go.
-  //
-  // Pacing strategy (avoids two races that previously stalled the feed):
-  //   1. We never start a new fetch while one is in flight — single-flight
-  //      only, so setFrameUri(A) is never overwritten by setFrameUri(B)
-  //      before Fresco finishes decoding A.
-  //   2. If the freshly fetched bytes are byte-identical to the previous
-  //      frame (ESP32 hasn't produced a new JPEG yet), we skip setState —
-  //      React bails on equal values so no onLoad would fire and the loop
-  //      would hang. We just re-poll immediately.
-  //   3. When bytes change, we setFrameUri and let Image.onLoad drive the
-  //      next fetch. A 1 s safety timer covers the rare case where onLoad
-  //      never fires (e.g. decode error); it is cleared by onLoad.
-  const scheduleNextFetch = (delay = 0) => {
-    if (!frameActiveRef.current) return;
-    if (safetyTimerRef.current) {
-      clearTimeout(safetyTimerRef.current);
-      safetyTimerRef.current = null;
-    }
-    setTimeout(fetchNextFrame, delay);
-  };
-
-  const fetchNextFrame = async () => {
-    if (!frameActiveRef.current || !sessionIdRef.current) return;
-    frameNumRef.current += 1;
-    const n   = frameNumRef.current;
-    const url = `${BACKEND_URL}/capture-preview/${sessionIdRef.current}?n=${n}`;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) {
-        // 503 = stream still connecting to ESP32; keep retrying
-        if (frameActiveRef.current) setTimeout(fetchNextFrame, 400);
-        return;
-      }
-      const ab = await res.arrayBuffer();
-      if (!frameActiveRef.current) return;
-
-      // Chunked base64 — safe for large frames on Hermes
-      const bytes     = new Uint8Array(ab);
-      const chunkSize = 0x8000; // 32 KB
-      let binary = '';
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-      }
-      const b64 = btoa(binary);
-
-      // Duplicate frame? ESP32 hasn't produced a new JPEG. Skip setState
-      // (setFrameUri with the same value bails — no render, no onLoad) and
-      // just poll again.
-      if (b64 === lastB64Ref.current) {
-        scheduleNextFetch(0);
-        return;
-      }
-      lastB64Ref.current = b64;
-      setFrameUri(`data:image/jpeg;base64,${b64}`);
-
-      // onLoad fires on successful decode and drives the next fetch.
-      // This safety timer covers decode failures where onLoad never fires.
-      if (safetyTimerRef.current) clearTimeout(safetyTimerRef.current);
-      safetyTimerRef.current = setTimeout(() => {
-        safetyTimerRef.current = null;
-        if (frameActiveRef.current) fetchNextFrame();
-      }, 1000);
-    } catch (err) {
-      console.error(`[Camera] fetchNextFrame error frame #${n}:`, err?.message ?? err);
-      if (frameActiveRef.current) setTimeout(fetchNextFrame, 400);
-    }
-  };
-
+  // Live-preview loop: expo-image fetches + decodes each frame on the
+  // native thread. We just bump `frameNum` in onLoad to bust the URL cache
+  // and kick off the next fetch. `cachePolicy="none"` + `recyclingKey`
+  // together mean the previous bitmap stays painted until the next decode
+  // completes (no black flash) and nothing is memoized between frames.
   useEffect(() => {
-    sessionIdRef.current = sessionId;
-
     if (sessionStatus !== "running" || !sessionId) {
-      frameActiveRef.current = false;
       if (connectTimeoutRef.current) {
         clearTimeout(connectTimeoutRef.current);
         connectTimeoutRef.current = null;
       }
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+      if (nextFrameTimerRef.current) {
+        clearTimeout(nextFrameTimerRef.current);
+        nextFrameTimerRef.current = null;
+      }
       return;
     }
 
-    frameActiveRef.current = true;
-    frameNumRef.current = 0;
-    lastB64Ref.current = "";
+    setFrameNum(1);
     setFrameLoadCount(0);
-    setFrameUri(null);
-
-    fetchNextFrame();
+    setFrameError(false);
+    setFps(0);
+    lastLoadAtRef.current = 0;
+    fpsWindowRef.current = [];
 
     // Show error if nothing renders within 20 s
     connectTimeoutRef.current = setTimeout(() => {
       setFrameLoadCount(count => {
         if (count === 0) {
-          frameActiveRef.current = false;
           setSessionStatus("error");
           Alert.alert(
             "Camera Unavailable",
@@ -180,14 +126,17 @@ export default function CaptureBottles() {
     }, 20_000);
 
     return () => {
-      frameActiveRef.current = false;
       if (connectTimeoutRef.current) {
         clearTimeout(connectTimeoutRef.current);
         connectTimeoutRef.current = null;
       }
-      if (safetyTimerRef.current) {
-        clearTimeout(safetyTimerRef.current);
-        safetyTimerRef.current = null;
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+      if (nextFrameTimerRef.current) {
+        clearTimeout(nextFrameTimerRef.current);
+        nextFrameTimerRef.current = null;
       }
     };
   }, [sessionStatus, sessionId]);
@@ -196,7 +145,7 @@ export default function CaptureBottles() {
     setSessionStatus("starting");
     setCapturesDone(0);
     setSessionId(null);
-    setFrameUri(null);
+    setFrameNum(0);
 
     const className = `${sanitize(patientName || auth.currentUser?.displayName || "patient")}_${sanitize(currentMedName)}`;
     console.log(`[CaptureBottles] startCapture class_name=${className} url=${BACKEND_URL}/start-capture`);
@@ -212,7 +161,6 @@ export default function CaptureBottles() {
       if (!res.ok) throw new Error(data.error ?? "Failed to start capture");
       setSessionId(data.session_id);
       setSessionStatus("running");
-      setFrameUri(null);
       setFrameError(false);
     } catch (err) {
       console.error("[CaptureBottles] startCapture error:", err?.message ?? err);
@@ -247,7 +195,7 @@ export default function CaptureBottles() {
       setSessionStatus("idle");
       setCapturesDone(0);
       setSessionId(null);
-      setFrameUri(null);
+      setFrameNum(0);
     } else {
       finishCapture();
     }
@@ -347,39 +295,77 @@ export default function CaptureBottles() {
         {/* ── Camera feed / idle card ──────────────────────────────────────── */}
         {sessionStatus === "running" ? (
           <View style={styles.cameraContainer}>
-            {frameUri ? (
+            {frameNum > 0 && sessionId && (
+              <Image
+                source={{ uri: `${BACKEND_URL}/capture-preview/${sessionId}?n=${frameNum}` }}
+                style={[styles.cameraFeed, { height: FEED_H }]}
+                contentFit="cover"
+                transition={0}
+                // `recyclingKey` holds the previous bitmap in place until the
+                // next decode completes — kills the black flash between frames.
+                // `cachePolicy="none"` keeps each ?n= fresh (no dedup, no disk).
+                recyclingKey="capture-preview"
+                cachePolicy="none"
+                onLoad={() => {
+                  setFrameError(false);
+                  setFrameLoadCount(c => c + 1);
+                  if (connectTimeoutRef.current) {
+                    clearTimeout(connectTimeoutRef.current);
+                    connectTimeoutRef.current = null;
+                  }
+                  const now = Date.now();
+
+                  // Rolling 1-second fps window. We only push setState when
+                  // the count changes so we don't churn renders faster than
+                  // needed.
+                  const w = fpsWindowRef.current;
+                  w.push(now);
+                  while (w.length > 0 && now - w[0] > 1000) w.shift();
+                  setFps(prev => (prev === w.length ? prev : w.length));
+
+                  // Native decode complete — bump URL to kick off next fetch,
+                  // but throttle so we don't decode faster than the display
+                  // can composite.
+                  const sinceLast = now - lastLoadAtRef.current;
+                  const delay     = Math.max(0, MIN_FRAME_INTERVAL_MS - sinceLast);
+                  lastLoadAtRef.current = now + delay;
+                  if (nextFrameTimerRef.current) clearTimeout(nextFrameTimerRef.current);
+                  nextFrameTimerRef.current = setTimeout(() => {
+                    nextFrameTimerRef.current = null;
+                    setFrameNum(n => n + 1);
+                  }, delay);
+                }}
+                onError={(e) => {
+                  // expo-image puts the error message on `e.error` directly now
+                  // (accessing `e.nativeEvent` logs a deprecation warning each call).
+                  const msg = e?.error ?? e?.nativeEvent?.error ?? String(e);
+                  // 503 is expected while the ESP32 stream is still connecting
+                  // (see server.py /capture-preview). Don't spam the console for it.
+                  const isExpected503 = /503|SERVICE UNAVAILABLE/i.test(msg);
+                  if (!isExpected503) {
+                    console.error("[Camera] Image.onError:", msg);
+                  }
+                  setFrameError(true);
+                  if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+                  retryTimeoutRef.current = setTimeout(() => {
+                    retryTimeoutRef.current = null;
+                    setFrameNum(n => n + 1);
+                  }, 400);
+                }}
+              />
+            )}
+            {frameLoadCount === 0 ? (
+              <View style={[StyleSheet.absoluteFill, styles.cameraPlaceholder]}>
+                <ActivityIndicator color="#4ade80" size="large" />
+                <Text style={styles.connectingText}>
+                  {frameError ? "No signal — check ESP32" : "Connecting to camera…"}
+                </Text>
+              </View>
+            ) : (
               <>
-                <Image
-                  source={{ uri: frameUri }}
-                  style={[styles.cameraFeed, { height: FEED_H }]}
-                  contentFit="cover"
-                  transition={0}
-                  // Never evict the current bitmap until a new one decodes —
-                  // this is what kills the black flash RN's Image showed
-                  // between frames. Disk/memory caching is irrelevant
-                  // (each data URI is unique) so we leave it at defaults.
-                  recyclingKey="capture-preview"
-                  onLoad={() => {
-                    setFrameError(false);
-                    setFrameLoadCount(c => c + 1);
-                    // Clear the 20 s connect timeout once the first frame renders.
-                    if (connectTimeoutRef.current) {
-                      clearTimeout(connectTimeoutRef.current);
-                      connectTimeoutRef.current = null;
-                    }
-                    // Decode complete — fire the next fetch immediately.
-                    scheduleNextFetch(0);
-                  }}
-                  onError={(e) => {
-                    console.error("[Camera] Image.onError:", e?.nativeEvent?.error ?? e);
-                    setFrameError(true);
-                  }}
-                />
                 {/* Debug counter — remove once confirmed working */}
                 <View style={styles.debugBadge}>
-                  <Text style={styles.debugText}>
-                    {frameLoadCount > 0 ? `${frameLoadCount} frames` : "loading…"}
-                  </Text>
+                  <Text style={styles.debugText}>{fps} fps · {frameLoadCount} total</Text>
                 </View>
                 {/* Guide box overlay */}
                 <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -411,13 +397,6 @@ export default function CaptureBottles() {
                   <Text style={styles.countBadgeText}>{capturesDone} / {TOTAL_CAPTURES}</Text>
                 </View>
               </>
-            ) : (
-              <View style={styles.cameraPlaceholder}>
-                <ActivityIndicator color="#4ade80" size="large" />
-                <Text style={styles.connectingText}>
-                  {frameError ? "No signal — check ESP32" : "Connecting to camera…"}
-                </Text>
-              </View>
             )}
           </View>
         ) : (
