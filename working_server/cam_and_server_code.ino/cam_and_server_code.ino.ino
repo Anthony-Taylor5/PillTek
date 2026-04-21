@@ -6,6 +6,7 @@
 
 #include "esp_camera.h"
 #include "WiFi.h"
+#include <WebServer.h>
 
 #include <HTTPClient.h>
 const char* pythonServer = "http://192.168.0.152:5000/trigger";  //
@@ -16,10 +17,10 @@ const char* pythonServer = "http://192.168.0.152:5000/trigger";  //
 #include <BLEAdvertisedDevice.h>
 
 // ===========================
-// Enter your WiFi credentials
+// Wi-Fi credentials (legacy — now provisioned via wifi_provisioning.ino / NVS)
 // ===========================
-const char *ssid = "Jio Ant";  // "T-Mobile Hotspot_6218_2.4GHz";   
-const char *password =   "sigmaalpha"; //"54786218";
+// const char *ssid =  "Jio Ant";  //"T-Mobile Hotspot_6218_2.4GHz";   //"Jio Ant";
+// const char *password = "sigmaalpha";  //"54786218"; //"sigmaalpha";
 
 
 const char* BEACON_MAC = "dd:34:02:0a:2d:f1"; 
@@ -49,6 +50,13 @@ void startCameraServer();
 void setupLedFlash();
 bool startCamera();
 bool stopCamera();
+
+// Defined in wifi_provisioning.ino
+bool loadCredentials(String& ssid, String& pass);
+bool tryConnect(const String& ssid, const String& pass);
+void startPortal();
+extern bool portalActive;
+extern WebServer server;
 
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
@@ -204,16 +212,25 @@ void setup() {
   setupLedFlash();
 #endif
 
-  WiFi.begin(ssid, password);
-  WiFi.setSleep(false);
-
-  Serial.print("WiFi connecting");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // ---- Wi-Fi: try NVS-saved creds, fall back to provisioning portal ----
+  String savedSsid, savedPass;
+  bool connected = false;
+  if (loadCredentials(savedSsid, savedPass)) {
+    Serial.printf("[NVS] Loaded saved SSID: \"%s\"\n", savedSsid.c_str());
+    connected = tryConnect(savedSsid, savedPass);
+    if (!connected) {
+      Serial.println("[WiFi] Saved credentials failed; starting portal.");
+    }
+  } else {
+    Serial.println("[NVS] No saved credentials; starting portal.");
   }
-  Serial.println("");
-  Serial.println("WiFi connected");
+
+  if (!connected) {
+    startPortal();
+    return; // stay in portal mode; loop() will service HTTP requests
+  }
+
+  WiFi.setSleep(false);
 
   startCameraServer();
 
@@ -285,6 +302,12 @@ bool stopCamera() {
 
 
 void loop() {
+
+    // Provisioning portal path: no Wi-Fi creds yet, so just serve the setup page.
+    if (portalActive) {
+        server.handleClient();
+        return;
+    }
 
     // Checks that we still see the beacon within time out range
     if (millis() - lastBeaconTime > beaconTimeoutMs) {
