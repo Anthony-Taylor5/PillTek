@@ -4,13 +4,13 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
-  Image,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth } from "../firebaseConfig";
 import { createMedications, fetchPatientByUid } from "../lib/api";
@@ -65,6 +65,8 @@ export default function CaptureBottles() {
   const frameActiveRef   = useRef(false);
   const sessionIdRef     = useRef(null);
   const connectTimeoutRef = useRef(null);
+  const safetyTimerRef   = useRef(null);
+  const lastB64Ref       = useRef("");
 
   const currentMedName = getMedName(medications[medIndex] ?? "");
   const isLastMed      = medIndex === medications.length - 1;
@@ -73,32 +75,42 @@ export default function CaptureBottles() {
   const selectedBox    = BOX_TYPES.find(b => b.key === boxType);
 
   // Fetch each frame via JS fetch → arrayBuffer → btoa → data URI.
-  // Data URIs bypass Fresco's cleartext-HTTP restriction in Expo Go and are
-  // inline, so the Image component makes no extra network call.
+  // Data URIs bypass Fresco's cleartext-HTTP restriction in Expo Go.
   //
-  // We DO NOT remount the Image via `key`. Remounting makes the Image slot
-  // blank for ~30–80 ms while the new source decodes — at a 100 ms poll
-  // interval, that gap dominates and the stream appears invisible. Keeping
-  // the Image mounted lets Fresco retain the previous bitmap on-screen until
-  // the new one is decoded, giving a smooth stream. When frame bytes differ
-  // the URI differs and Image re-decodes; when bytes are byte-identical the
-  // URI is identical, Fresco no-ops, and the previous (visible) frame stays.
+  // Pacing strategy (avoids two races that previously stalled the feed):
+  //   1. We never start a new fetch while one is in flight — single-flight
+  //      only, so setFrameUri(A) is never overwritten by setFrameUri(B)
+  //      before Fresco finishes decoding A.
+  //   2. If the freshly fetched bytes are byte-identical to the previous
+  //      frame (ESP32 hasn't produced a new JPEG yet), we skip setState —
+  //      React bails on equal values so no onLoad would fire and the loop
+  //      would hang. We just re-poll immediately.
+  //   3. When bytes change, we setFrameUri and let Image.onLoad drive the
+  //      next fetch. A 1 s safety timer covers the rare case where onLoad
+  //      never fires (e.g. decode error); it is cleared by onLoad.
+  const scheduleNextFetch = (delay = 0) => {
+    if (!frameActiveRef.current) return;
+    if (safetyTimerRef.current) {
+      clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+    setTimeout(fetchNextFrame, delay);
+  };
+
   const fetchNextFrame = async () => {
     if (!frameActiveRef.current || !sessionIdRef.current) return;
     frameNumRef.current += 1;
     const n   = frameNumRef.current;
     const url = `${BACKEND_URL}/capture-preview/${sessionIdRef.current}?n=${n}`;
-    console.log(`[Camera] → GET frame #${n}`);
     try {
       const res = await fetch(url);
-      console.log(`[Camera] ← frame #${n} status=${res.status}`);
       if (!res.ok) {
         // 503 = stream still connecting to ESP32; keep retrying
         if (frameActiveRef.current) setTimeout(fetchNextFrame, 400);
         return;
       }
       const ab = await res.arrayBuffer();
-      console.log(`[Camera] frame #${n} size=${ab.byteLength}B`);
+      if (!frameActiveRef.current) return;
 
       // Chunked base64 — safe for large frames on Hermes
       const bytes     = new Uint8Array(ab);
@@ -109,12 +121,23 @@ export default function CaptureBottles() {
       }
       const b64 = btoa(binary);
 
-      if (frameActiveRef.current) {
-        console.log(`[Camera] setFrameUri frame #${n} (${b64.length} base64 chars)`);
-        setFrameUri(`data:image/jpeg;base64,${b64}`);
-        // Self-schedule the next fetch regardless of whether Image.onLoad fires.
-        setTimeout(fetchNextFrame, 100);
+      // Duplicate frame? ESP32 hasn't produced a new JPEG. Skip setState
+      // (setFrameUri with the same value bails — no render, no onLoad) and
+      // just poll again.
+      if (b64 === lastB64Ref.current) {
+        scheduleNextFetch(0);
+        return;
       }
+      lastB64Ref.current = b64;
+      setFrameUri(`data:image/jpeg;base64,${b64}`);
+
+      // onLoad fires on successful decode and drives the next fetch.
+      // This safety timer covers decode failures where onLoad never fires.
+      if (safetyTimerRef.current) clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = setTimeout(() => {
+        safetyTimerRef.current = null;
+        if (frameActiveRef.current) fetchNextFrame();
+      }, 1000);
     } catch (err) {
       console.error(`[Camera] fetchNextFrame error frame #${n}:`, err?.message ?? err);
       if (frameActiveRef.current) setTimeout(fetchNextFrame, 400);
@@ -135,6 +158,7 @@ export default function CaptureBottles() {
 
     frameActiveRef.current = true;
     frameNumRef.current = 0;
+    lastB64Ref.current = "";
     setFrameLoadCount(0);
     setFrameUri(null);
 
@@ -160,6 +184,10 @@ export default function CaptureBottles() {
       if (connectTimeoutRef.current) {
         clearTimeout(connectTimeoutRef.current);
         connectTimeoutRef.current = null;
+      }
+      if (safetyTimerRef.current) {
+        clearTimeout(safetyTimerRef.current);
+        safetyTimerRef.current = null;
       }
     };
   }, [sessionStatus, sessionId]);
@@ -324,26 +352,27 @@ export default function CaptureBottles() {
                 <Image
                   source={{ uri: frameUri }}
                   style={[styles.cameraFeed, { height: FEED_H }]}
-                  resizeMode="cover"
-                  fadeDuration={0}
+                  contentFit="cover"
+                  transition={0}
+                  // Never evict the current bitmap until a new one decodes —
+                  // this is what kills the black flash RN's Image showed
+                  // between frames. Disk/memory caching is irrelevant
+                  // (each data URI is unique) so we leave it at defaults.
+                  recyclingKey="capture-preview"
                   onLoad={() => {
                     setFrameError(false);
-                    setFrameLoadCount(c => {
-                      const next = c + 1;
-                      console.log(`[Camera] Image.onLoad fired — total frames rendered: ${next}`);
-                      return next;
-                    });
+                    setFrameLoadCount(c => c + 1);
                     // Clear the 20 s connect timeout once the first frame renders.
                     if (connectTimeoutRef.current) {
                       clearTimeout(connectTimeoutRef.current);
                       connectTimeoutRef.current = null;
                     }
-                    // Next fetch is already self-scheduled in fetchNextFrame — no call needed here.
+                    // Decode complete — fire the next fetch immediately.
+                    scheduleNextFetch(0);
                   }}
                   onError={(e) => {
                     console.error("[Camera] Image.onError:", e?.nativeEvent?.error ?? e);
                     setFrameError(true);
-                    // Self-scheduling loop already handles the next fetch — no manual retry needed.
                   }}
                 />
                 {/* Debug counter — remove once confirmed working */}
