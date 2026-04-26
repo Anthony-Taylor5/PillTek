@@ -102,3 +102,38 @@ ALTER TABLE detection_events DISABLE ROW LEVEL SECURITY;
 -- INSERT INTO storage.buckets (id, name, public)
 --   VALUES ('bottle-images', 'bottle-images', false)
 --   ON CONFLICT DO NOTHING;
+
+-- ── 2026-04-26: bottle_images extension + user_models + model-weights bucket ──
+
+-- Extend bottle_images (backward-compatible). Existing mobile-app rows that set
+-- medication_id keep working; backend pipeline rows store strings instead.
+ALTER TABLE bottle_images ALTER COLUMN medication_id DROP NOT NULL;
+ALTER TABLE bottle_images ADD COLUMN IF NOT EXISTS user_identifier text;
+ALTER TABLE bottle_images ADD COLUMN IF NOT EXISTS medication_name text;
+ALTER TABLE bottle_images ADD COLUMN IF NOT EXISTS class_name      text;
+ALTER TABLE bottle_images ADD COLUMN IF NOT EXISTS split           text
+  CHECK (split IN ('train','val'));
+
+-- Trained per-user model registry.
+CREATE TABLE IF NOT EXISTS user_models (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_identifier      text NOT NULL,
+  medication_name      text NOT NULL,
+  model_name           text NOT NULL,
+  base_model           text,
+  dataset_path         text,
+  weights_local_path   text,
+  weights_storage_path text,
+  version              integer DEFAULT 1,
+  status               text DEFAULT 'ready'
+                            CHECK (status IN ('training','ready','failed')),
+  created_at           timestamptz DEFAULT now()
+);
+ALTER TABLE user_models DISABLE ROW LEVEL SECURITY;
+
+-- Storage bucket for trained .pt weights.
+-- May fail under non-service-role connections — fallback is creating it manually
+-- in Dashboard → Storage → New bucket. Name: model-weights, Public: false.
+INSERT INTO storage.buckets (id, name, public)
+  VALUES ('model-weights', 'model-weights', false)
+  ON CONFLICT DO NOTHING;
