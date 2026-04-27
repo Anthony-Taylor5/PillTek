@@ -123,7 +123,7 @@ def upload_dataset_images(class_name: str, dataset_dir: Path) -> tuple[int, int]
 
     user_id, med = parse_class_name(class_name)
     files = list(_iter_dataset_files(Path(dataset_dir)))
-    _log(f"uploading {len(files)} images for {class_name}…")
+    _log(f"uploading {len(files)} images for {class_name}...")
     if not files:
         return (0, 0)
 
@@ -137,7 +137,7 @@ def upload_dataset_images(class_name: str, dataset_dir: Path) -> tuple[int, int]
             failures.append((split, fp))
 
     if failures:
-        _log(f"retrying {len(failures)} failed uploads in {_RETRY_DELAY_S}s…")
+        _log(f"retrying {len(failures)} failed uploads in {_RETRY_DELAY_S}s...")
         time.sleep(_RETRY_DELAY_S)
         still_failing: list[tuple[str, Path]] = []
         for split, fp in failures:
@@ -149,7 +149,7 @@ def upload_dataset_images(class_name: str, dataset_dir: Path) -> tuple[int, int]
 
     failed = len(failures)
     dt = time.monotonic() - t0
-    _log(f"✓ uploaded {uploaded}/{len(files)} ({failed} failed) in {dt:.1f}s")
+    _log(f"[OK] uploaded {uploaded}/{len(files)} ({failed} failed) in {dt:.1f}s")
     return (uploaded, failed)
 
 
@@ -231,7 +231,7 @@ def upload_model_weights(class_name: str, weights_path: Path,
                 fh.read(),
                 {"content-type": "application/octet-stream", "upsert": "true"},
             )
-        _log(f"✓ weights uploaded ({size_mb:.1f} MB)")
+        _log(f"[OK] weights uploaded ({size_mb:.1f} MB)")
         return storage_path
     except Exception as e:
         _logerr(f"weights upload failed: {e}")
