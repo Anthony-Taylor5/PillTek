@@ -135,3 +135,63 @@ def test_upload_dataset_images_returns_zero_when_no_client(tmp_path, monkeypatch
 
     uploaded, failed = m.upload_dataset_images("anthony_taylor_advil", base)
     assert (uploaded, failed) == (0, 0)
+
+
+def _mock_client_with_models(rows):
+    """Mock client whose user_models query returns the given existing rows."""
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=rows)
+    client.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[{"id": "new-row"}])
+    client.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[{}])
+    return client
+
+
+def test_compute_next_version_no_existing(monkeypatch):
+    m = _reload_module()
+    client = _mock_client_with_models([])
+    monkeypatch.setattr(m, "get_client", lambda: client)
+    assert m.compute_next_version("anthony_taylor_advil") == 1
+
+
+def test_compute_next_version_with_existing(monkeypatch):
+    m = _reload_module()
+    client = _mock_client_with_models([
+        {"version": 1}, {"version": 2}, {"version": 3},
+    ])
+    monkeypatch.setattr(m, "get_client", lambda: client)
+    assert m.compute_next_version("anthony_taylor_advil") == 4
+
+
+def test_insert_model_row_returns_id(monkeypatch):
+    m = _reload_module()
+    client = _mock_client_with_models([])
+    monkeypatch.setattr(m, "get_client", lambda: client)
+    rid = m.insert_model_row(
+        class_name="anthony_taylor_advil",
+        base_model="v10",
+        dataset_path="user_bottles/anthony_taylor_advil",
+        version=1,
+        status="training",
+    )
+    assert rid == "new-row"
+    inserted = client.table.return_value.insert.call_args.args[0]
+    assert inserted["model_name"]      == "anthony_taylor_advil"
+    assert inserted["user_identifier"] == "anthony_taylor"
+    assert inserted["medication_name"] == "advil"
+    assert inserted["base_model"]      == "v10"
+    assert inserted["version"]         == 1
+    assert inserted["status"]          == "training"
+
+
+def test_update_model_status_passes_fields(monkeypatch):
+    m = _reload_module()
+    client = _mock_client_with_models([])
+    monkeypatch.setattr(m, "get_client", lambda: client)
+    m.update_model_status("model-id-123", status="ready",
+                          weights_local_path="runs/foo/weights/best.pt",
+                          weights_storage_path="model-weights/foo/v1/best.pt")
+    payload = client.table.return_value.update.call_args.args[0]
+    assert payload["status"]               == "ready"
+    assert payload["weights_local_path"]   == "runs/foo/weights/best.pt"
+    assert payload["weights_storage_path"] == "model-weights/foo/v1/best.pt"

@@ -151,3 +151,58 @@ def upload_dataset_images(class_name: str, dataset_dir: Path) -> tuple[int, int]
     dt = time.monotonic() - t0
     _log(f"✓ uploaded {uploaded}/{len(files)} ({failed} failed) in {dt:.1f}s")
     return (uploaded, failed)
+
+
+def compute_next_version(class_name: str) -> int:
+    """Return max(version)+1 across existing user_models rows for class_name, or 1."""
+    client = get_client()
+    if client is None:
+        return 1
+    try:
+        res = client.table("user_models").select("version").eq("model_name", class_name).execute()
+        rows = res.data or []
+        if not rows:
+            return 1
+        return max(int(r.get("version") or 0) for r in rows) + 1
+    except Exception as e:
+        _logerr(f"compute_next_version failed: {e}")
+        return 1
+
+
+def insert_model_row(class_name: str, base_model: str, dataset_path: str,
+                     version: int, status: str = "training") -> str | None:
+    """Insert a user_models row. Returns the new row's id, or None on failure."""
+    client = get_client()
+    if client is None:
+        return None
+    user_id, med = parse_class_name(class_name)
+    payload = {
+        "user_identifier": user_id,
+        "medication_name": med,
+        "model_name":      class_name,
+        "base_model":      base_model,
+        "dataset_path":    dataset_path,
+        "version":         version,
+        "status":          status,
+    }
+    try:
+        res = client.table("user_models").insert(payload).execute()
+        rid = (res.data or [{}])[0].get("id")
+        _log(f"inserted user_models row id={rid} status={status} v{version}")
+        return rid
+    except Exception as e:
+        _logerr(f"insert_model_row failed: {e}")
+        return None
+
+
+def update_model_status(model_id: str, status: str, **fields) -> None:
+    """Update an existing user_models row. Never raises."""
+    client = get_client()
+    if client is None or not model_id:
+        return
+    payload = {"status": status, **fields}
+    try:
+        client.table("user_models").update(payload).eq("id", model_id).execute()
+        _log(f"user_models id={model_id} → status={status}")
+    except Exception as e:
+        _logerr(f"update_model_status failed: {e}")
