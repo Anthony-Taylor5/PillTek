@@ -54,3 +54,84 @@ def test_get_client_returns_cached_client_when_env_present(monkeypatch):
         assert m.get_client() is fake_client
         assert m.get_client() is fake_client  # cached — second call doesn't recreate
         assert cc.call_count == 1
+
+
+def _make_dataset(tmp_path: Path, n_train: int = 2, n_val: int = 1) -> Path:
+    base = tmp_path / "anthony_taylor_advil"
+    (base / "images" / "train").mkdir(parents=True)
+    (base / "images" / "val").mkdir(parents=True)
+    for i in range(n_train):
+        (base / "images" / "train" / f"bottle_{i:03d}.jpg").write_bytes(b"\xff\xd8fake")
+    for i in range(n_val):
+        (base / "images" / "val" / f"bottle_v{i:03d}.jpg").write_bytes(b"\xff\xd8fakeV")
+    return base
+
+
+def _make_mock_client():
+    """Mock Supabase client where storage.upload + table.insert both succeed."""
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.storage.from_.return_value.upload.return_value = None
+    client.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[{"id": "row-id"}])
+    return client
+
+
+def test_upload_dataset_images_uploads_every_file(tmp_path, monkeypatch):
+    base = _make_dataset(tmp_path, n_train=2, n_val=1)
+    m = _reload_module()
+    client = _make_mock_client()
+    monkeypatch.setattr(m, "get_client", lambda: client)
+
+    uploaded, failed = m.upload_dataset_images("anthony_taylor_advil", base)
+    assert (uploaded, failed) == (3, 0)
+
+    # Each file → one storage upload + one DB insert
+    assert client.storage.from_.return_value.upload.call_count == 3
+    assert client.table.return_value.insert.call_count == 3
+
+
+def test_upload_dataset_images_records_split_and_strings(tmp_path, monkeypatch):
+    base = _make_dataset(tmp_path, n_train=1, n_val=1)
+    m = _reload_module()
+    client = _make_mock_client()
+    monkeypatch.setattr(m, "get_client", lambda: client)
+
+    m.upload_dataset_images("anthony_taylor_advil", base)
+
+    inserted_rows = [
+        call.args[0]
+        for call in client.table.return_value.insert.call_args_list
+    ]
+    splits = sorted(r["split"] for r in inserted_rows)
+    assert splits == ["train", "val"]
+    for r in inserted_rows:
+        assert r["user_identifier"] == "anthony_taylor"
+        assert r["medication_name"] == "advil"
+        assert r["class_name"]      == "anthony_taylor_advil"
+        assert r["filename"].startswith("bottle_")
+        assert r["storage_path"].startswith("anthony_taylor_advil/")
+
+
+def test_upload_dataset_images_continues_on_per_file_failure(tmp_path, monkeypatch):
+    base = _make_dataset(tmp_path, n_train=2, n_val=1)
+    m = _reload_module()
+    client = _make_mock_client()
+
+    # Make the SECOND upload raise; first and third succeed.
+    seq = [None, RuntimeError("network blip"), None, None, None, None]  # extra slots for retry
+    client.storage.from_.return_value.upload.side_effect = seq
+    monkeypatch.setattr(m, "get_client", lambda: client)
+    monkeypatch.setattr(m, "_RETRY_DELAY_S", 0.0)  # don't actually sleep in tests
+
+    uploaded, failed = m.upload_dataset_images("anthony_taylor_advil", base)
+    # Retry succeeds on the second pass → ends up 3/0.
+    assert uploaded == 3 and failed == 0
+
+
+def test_upload_dataset_images_returns_zero_when_no_client(tmp_path, monkeypatch):
+    base = _make_dataset(tmp_path)
+    m = _reload_module()
+    monkeypatch.setattr(m, "get_client", lambda: None)
+
+    uploaded, failed = m.upload_dataset_images("anthony_taylor_advil", base)
+    assert (uploaded, failed) == (0, 0)
