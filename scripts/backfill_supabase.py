@@ -63,9 +63,13 @@ def _backfill_weights(class_name: str, weights_path: Path, base_model: str) -> i
         version=version,
     )
     if storage_path and model_id:
+        try:
+            local_path = str(weights_path.relative_to(_REPO))
+        except ValueError:
+            local_path = str(weights_path)
         supabase_sync.update_model_status(
             model_id, status="ready",
-            weights_local_path=str(weights_path.relative_to(_REPO)) if weights_path.is_absolute() else str(weights_path),
+            weights_local_path=local_path,
             weights_storage_path=f"model-weights/{storage_path}",
         )
         return 0
@@ -89,6 +93,8 @@ def main() -> int:
 
     if not args.class_name and not args.all:
         ap.error("provide --class-name or --all")
+    if args.include_weights and not args.class_name:
+        ap.error("--include-weights requires --class-name")
 
     dataset_root = (_REPO / args.dataset_root) if not Path(args.dataset_root).is_absolute() else Path(args.dataset_root)
 
@@ -101,8 +107,6 @@ def main() -> int:
         failures += _backfill_class(args.class_name, dataset_root)
 
     if args.include_weights:
-        if not args.class_name:
-            ap.error("--include-weights requires --class-name")
         weights = Path(args.include_weights)
         if not weights.is_absolute():
             weights = _REPO / weights
