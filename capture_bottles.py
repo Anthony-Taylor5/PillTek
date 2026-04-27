@@ -720,6 +720,12 @@ def main() -> int:
         help="Root folder for training runs (default: runs/)",
     )
     parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Exact run folder name under --runs-dir. If omitted, derived from "
+             "--class-name via class_run_dir() (anthony_taylor_advil, _v2, _v3, ...).",
+    )
+    parser.add_argument(
         "--train-only",
         action="store_true",
         help="Skip capture, run training on an existing dataset directory.",
@@ -765,7 +771,8 @@ def main() -> int:
         if not data_yaml.exists():
             data_yaml = write_data_yaml(dataset_dir, class_name=args.class_name)
         print(f"  Dataset   : {dataset_dir} ({total_saved} images)")
-        run_dir = next_run_dir(runs_dir, prefix="user_tuned_")
+        run_dir = (runs_dir / args.run_name) if args.run_name else class_run_dir(runs_dir, args.class_name)
+        run_dir.mkdir(parents=True, exist_ok=True)
         best_pt = run_training(
             base_weights=str(weights_path),
             data_yaml=data_yaml,
@@ -818,8 +825,9 @@ def main() -> int:
     print(f"[INFO] Dataset written to: {dataset_dir}")
     print(f"[INFO] data.yaml: {data_yaml}")
 
-    # Find the next available user_tuned_X run folder
-    run_dir = next_run_dir(runs_dir, prefix="user_tuned_")
+    # Find the next available run folder
+    run_dir = (runs_dir / args.run_name) if args.run_name else class_run_dir(runs_dir, args.class_name)
+    run_dir.mkdir(parents=True, exist_ok=True)
     print(f"[INFO] Training output: {run_dir}")
 
     best_pt = run_training(
