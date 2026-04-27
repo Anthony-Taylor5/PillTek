@@ -29,6 +29,7 @@ import time
 import threading
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Lock
 
 import requests as _requests
@@ -55,6 +56,13 @@ try:
 except Exception as _e:
     _db = None
     print(f'[Supabase] Client init failed: {_e}')
+
+# ── Supabase sync (dataset images + model weights) ───────────────────────────
+try:
+    from backend import supabase_sync
+except ImportError:
+    sys.path.insert(0, os.path.dirname(__file__))
+    import supabase_sync  # type: ignore[no-redef]
 
 # ── Patient lookup ────────────────────────────────────────────────────────────
 _PATIENT_CODE = os.environ.get('PATIENT_CODE', '').strip().upper()
@@ -193,7 +201,7 @@ _running_process: subprocess.Popen | None = None
 _capture_sessions: dict[str, dict] = {}
 _capture_lock = Lock()
 
-_ESP32_STREAM_URL = os.environ.get('ESP32_STREAM_URL', 'http://192.168.0.31:81/stream')
+_ESP32_STREAM_URL = os.environ.get('ESP32_STREAM_URL', 'http://192.168.0.211:81/stream')
 _YOLO_WEIGHTS     = os.environ.get('YOLO_WEIGHTS', 'runs/detect/runs/train_v10/weights/best.pt')
 _REPO_ROOT        = os.path.normpath(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -304,6 +312,21 @@ def detection_event():
     return jsonify({'status': 'logged'}), 200
 
 
+def _trigger_image_upload(session):
+    """Spawn dataset-image upload in a background thread. Non-blocking."""
+    def _run():
+        sid = session['session_id'][:8]
+        class_name  = session['class_name']
+        dataset_dir = Path(_REPO_ROOT) / 'user_bottles' / class_name
+        print(f"[Sync:{sid}] starting dataset image upload for {class_name}")
+        try:
+            uploaded, failed = supabase_sync.upload_dataset_images(class_name, dataset_dir)
+            print(f"[Sync:{sid}] dataset upload finished: {uploaded} uploaded, {failed} failed")
+        except Exception as e:
+            print(f"[Sync:{sid}] dataset upload errored: {e}", file=sys.stderr)
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def _trigger_training(session):
     """Spawn capture_bottles.py --train-only in a background thread."""
     def _train():
@@ -388,7 +411,6 @@ def start_capture():
     class_name = data.get('class_name', 'user_bottle')
     source     = data.get('source', _ESP32_STREAM_URL)
 
-    from pathlib import Path
     dataset_dir = Path(_REPO_ROOT) / 'user_bottles' / class_name
     dirs        = prepare_dataset_dirs(dataset_dir)
     data_yaml   = write_data_yaml(dataset_dir, class_name=class_name)
@@ -619,6 +641,7 @@ def capture_frame():
     print(f"[Capture:{session_id[:8]}] {done}/{session['total']} saved (box={box_type})")
 
     if done >= session['total']:
+        _trigger_image_upload(session)
         _trigger_training(session)
 
     return jsonify({
