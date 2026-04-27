@@ -743,6 +743,25 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # Validate --run-name: must be a single, non-empty path component
+    if args.run_name is not None:
+        rn = args.run_name.strip()
+        _rn_path = Path(rn) if rn else None
+        if (
+            not rn
+            or '/' in rn
+            or '\\' in rn
+            or rn in ('.', '..')
+            or (_rn_path is not None and _rn_path.is_absolute())
+            or (_rn_path is not None and len(_rn_path.parts) != 1)
+        ):
+            print(
+                f"[ERROR] --run-name must be a single path component (no separators, "
+                f"not empty, not '.' or '..', not absolute). Got: {args.run_name!r}",
+                file=sys.stderr,
+            )
+            return 2
+
     cwd         = Path.cwd()
     dataset_dir = cwd / args.dataset_dir / args.class_name
     runs_dir    = cwd / args.runs_dir
