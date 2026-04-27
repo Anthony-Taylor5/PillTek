@@ -25,3 +25,32 @@ def test_parse_single_token_falls_back():
 
 def test_parse_empty_string():
     assert parse_class_name("") == ("", "")
+
+
+import importlib
+
+from unittest.mock import patch
+
+
+def _reload_module():
+    import backend.supabase_sync as m
+    importlib.reload(m)
+    return m
+
+
+def test_get_client_returns_none_when_env_missing(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    m = _reload_module()
+    assert m.get_client() is None
+
+
+def test_get_client_returns_cached_client_when_env_present(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service_key_xxx")
+    m = _reload_module()
+    fake_client = object()
+    with patch("backend.supabase_sync.create_client", return_value=fake_client) as cc:
+        assert m.get_client() is fake_client
+        assert m.get_client() is fake_client  # cached — second call doesn't recreate
+        assert cc.call_count == 1
