@@ -206,6 +206,7 @@ _capture_lock = Lock()
 _ESP32_STREAM_URL = os.environ.get('ESP32_STREAM_URL', 'http://192.168.0.31:81/stream')
 _YOLO_WEIGHTS     = os.environ.get('YOLO_WEIGHTS', 'runs/detect/runs/train_v10/weights/best.pt')
 _REPO_ROOT        = os.path.normpath(os.path.join(os.path.dirname(__file__), '..'))
+_RUNS_DIR_NAME    = 'runs'
 
 # ── Capture utilities (cv2 + capture_bottles) ─────────────────────────────────
 sys.path.insert(0, _REPO_ROOT)
@@ -336,7 +337,7 @@ def _trigger_training(session):
         class_name = session['class_name']
         version    = supabase_sync.compute_next_version(class_name)
         run_name   = class_name if version == 1 else f"{class_name}_v{version}"
-        run_dir    = os.path.join(_REPO_ROOT, 'runs', run_name)
+        run_dir    = os.path.join(_REPO_ROOT, _RUNS_DIR_NAME, run_name)
         weights_local = os.path.join(run_dir, 'weights', 'best.pt')
 
         # Pick a friendly base_model label: 'v10' if YOLO_WEIGHTS lives under
@@ -356,7 +357,7 @@ def _trigger_training(session):
             '--class-name',   class_name,
             '--weights',      _YOLO_WEIGHTS,
             '--dataset-dir',  'user_bottles',
-            '--runs-dir',     'runs',
+            '--runs-dir',     _RUNS_DIR_NAME,
             '--run-name',     run_name,
             '--train-only',
         ]
