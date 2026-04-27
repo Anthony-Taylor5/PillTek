@@ -201,7 +201,9 @@ _running_process: subprocess.Popen | None = None
 _capture_sessions: dict[str, dict] = {}
 _capture_lock = Lock()
 
-_ESP32_STREAM_URL = os.environ.get('ESP32_STREAM_URL', 'http://192.168.0.211:81/stream')
+# Default ESP32 camera stream URL. .31 is the current device address; .211 is a
+# previously-used address kept here for reference when swapping back during testing.
+_ESP32_STREAM_URL = os.environ.get('ESP32_STREAM_URL', 'http://192.168.0.31:81/stream')
 _YOLO_WEIGHTS     = os.environ.get('YOLO_WEIGHTS', 'runs/detect/runs/train_v10/weights/best.pt')
 _REPO_ROOT        = os.path.normpath(os.path.join(os.path.dirname(__file__), '..'))
 
