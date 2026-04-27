@@ -378,8 +378,11 @@ def _trigger_training(session):
                     version=version,
                 )
                 if model_id:
+                    # Storage upload failure → 'local_only' so consumers can tell the
+                    # row has weights on the training host but not in Supabase.
+                    row_status = 'ready' if storage_path else 'local_only'
                     supabase_sync.update_model_status(
-                        model_id, status='ready',
+                        model_id, status=row_status,
                         weights_local_path=os.path.relpath(weights_local, _REPO_ROOT),
                         weights_storage_path=(f"model-weights/{storage_path}" if storage_path else None),
                     )

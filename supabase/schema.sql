@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS user_models (
   weights_storage_path text,
   version              integer DEFAULT 1,
   status               text DEFAULT 'ready'
-                            CHECK (status IN ('training','ready','failed')),
+                            CHECK (status IN ('training','ready','local_only','failed')),
   created_at           timestamptz DEFAULT now()
 );
 ALTER TABLE user_models DISABLE ROW LEVEL SECURITY;
