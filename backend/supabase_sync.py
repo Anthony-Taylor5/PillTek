@@ -206,3 +206,33 @@ def update_model_status(model_id: str, status: str, **fields) -> None:
         _log(f"user_models id={model_id} → status={status}")
     except Exception as e:
         _logerr(f"update_model_status failed: {e}")
+
+
+def upload_model_weights(class_name: str, weights_path: Path,
+                         version: int) -> str | None:
+    """
+    Upload best.pt to model-weights/<class_name>/v<version>/best.pt.
+    Returns the storage path on success, None on failure.
+    """
+    client = get_client()
+    if client is None:
+        return None
+    weights_path = Path(weights_path)
+    if not weights_path.exists():
+        _logerr(f"weights file not found: {weights_path}")
+        return None
+    storage_path = f"{class_name}/v{version}/{weights_path.name}"
+    size_mb = weights_path.stat().st_size / 1024 / 1024
+    _log(f"uploading weights → model-weights/{storage_path} ({size_mb:.1f} MB)")
+    try:
+        with weights_path.open("rb") as fh:
+            client.storage.from_(_BUCKET_WEIGHTS).upload(
+                storage_path,
+                fh.read(),
+                {"content-type": "application/octet-stream", "upsert": "true"},
+            )
+        _log(f"✓ weights uploaded ({size_mb:.1f} MB)")
+        return storage_path
+    except Exception as e:
+        _logerr(f"weights upload failed: {e}")
+        return None

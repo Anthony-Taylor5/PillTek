@@ -195,3 +195,43 @@ def test_update_model_status_passes_fields(monkeypatch):
     assert payload["status"]               == "ready"
     assert payload["weights_local_path"]   == "runs/foo/weights/best.pt"
     assert payload["weights_storage_path"] == "model-weights/foo/v1/best.pt"
+
+
+def test_upload_model_weights_uploads_file(tmp_path, monkeypatch):
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"\x80\x02fake-weights")
+    m = _reload_module()
+    client = _mock_client_with_models([])
+    monkeypatch.setattr(m, "get_client", lambda: client)
+
+    storage_path = m.upload_model_weights(
+        class_name="anthony_taylor_advil",
+        weights_path=weights,
+        version=1,
+    )
+    assert storage_path == "anthony_taylor_advil/v1/best.pt"
+    upload_call = client.storage.from_.return_value.upload.call_args
+    assert upload_call.args[0] == "anthony_taylor_advil/v1/best.pt"
+
+
+def test_upload_model_weights_returns_none_when_missing_file(tmp_path, monkeypatch):
+    m = _reload_module()
+    client = _mock_client_with_models([])
+    monkeypatch.setattr(m, "get_client", lambda: client)
+    assert m.upload_model_weights(
+        class_name="anthony_taylor_advil",
+        weights_path=tmp_path / "nope.pt",
+        version=1,
+    ) is None
+
+
+def test_upload_model_weights_returns_none_without_client(tmp_path, monkeypatch):
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"x")
+    m = _reload_module()
+    monkeypatch.setattr(m, "get_client", lambda: None)
+    assert m.upload_model_weights(
+        class_name="anthony_taylor_advil",
+        weights_path=weights,
+        version=2,
+    ) is None
