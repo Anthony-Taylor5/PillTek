@@ -328,30 +328,67 @@ def _trigger_image_upload(session):
 
 
 def _trigger_training(session):
-    """Spawn capture_bottles.py --train-only in a background thread."""
+    """Insert user_models row, fine-tune via subprocess, upload weights, finalize row."""
     def _train():
-        sid = session['session_id'][:8]
+        sid        = session['session_id'][:8]
+        class_name = session['class_name']
+        version    = supabase_sync.compute_next_version(class_name)
+        run_name   = class_name if version == 1 else f"{class_name}_v{version}"
+        run_dir    = os.path.join(_REPO_ROOT, 'runs', run_name)
+        weights_local = os.path.join(run_dir, 'weights', 'best.pt')
+
+        # Pick a friendly base_model label: 'v10' if YOLO_WEIGHTS lives under
+        # runs/.../train_v10/..., else the full path.
+        base_label = 'v10' if 'train_v10' in _YOLO_WEIGHTS else _YOLO_WEIGHTS
+
+        model_id = supabase_sync.insert_model_row(
+            class_name=class_name,
+            base_model=base_label,
+            dataset_path=os.path.join('user_bottles', class_name),
+            version=version,
+            status='training',
+        )
+
         cmd = [
             sys.executable, os.path.join(_REPO_ROOT, 'capture_bottles.py'),
-            '--class-name',   session['class_name'],
+            '--class-name',   class_name,
             '--weights',      _YOLO_WEIGHTS,
             '--dataset-dir',  'user_bottles',
+            '--runs-dir',     'runs',
+            '--run-name',     run_name,
             '--train-only',
         ]
-        print(f'[Training:{sid}] Starting fine-tune for {session["class_name"]}')
+        print(f"[Training:{sid}] starting fine-tune (base={base_label}, run={run_name})")
+        status = 'train_error'
         try:
             proc = subprocess.Popen(
                 cmd, cwd=_REPO_ROOT,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
             for line in proc.stdout:
-                print(f'[Training:{sid}] {line.rstrip()}')
+                print(f"[Training:{sid}] {line.rstrip()}")
             proc.wait()
-            status = 'trained' if proc.returncode == 0 else 'train_error'
-            print(f'[Training:{sid}] Finished with status: {status}')
+            if proc.returncode == 0 and os.path.exists(weights_local):
+                status = 'trained'
+                storage_path = supabase_sync.upload_model_weights(
+                    class_name=class_name,
+                    weights_path=Path(weights_local),
+                    version=version,
+                )
+                if model_id:
+                    supabase_sync.update_model_status(
+                        model_id, status='ready',
+                        weights_local_path=os.path.relpath(weights_local, _REPO_ROOT),
+                        weights_storage_path=(f"model-weights/{storage_path}" if storage_path else None),
+                    )
+            else:
+                if model_id:
+                    supabase_sync.update_model_status(model_id, status='failed')
+            print(f"[Training:{sid}] finished with status: {status}")
         except Exception as e:
-            status = 'train_error'
-            print(f'[Training:{sid}] Error: {e}')
+            print(f"[Training:{sid}] error: {e}", file=sys.stderr)
+            if model_id:
+                supabase_sync.update_model_status(model_id, status='failed')
         finally:
             with _capture_lock:
                 session['training_status'] = status
