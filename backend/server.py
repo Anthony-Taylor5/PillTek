@@ -1,12 +1,13 @@
 """
 backend/server.py — PillTek backend server.
 
-Extends beacon_trigger.py with:
-  • Supabase event logging for every beacon + detection event
-  • POST /detection-event  — receives structured events from test_with_hand_recognition.py
-  • POST /trigger          — unchanged ESP32 beacon webhook (backward compatible)
+Endpoints:
+  • POST /trigger          — ESP32 beacon webhook (replaces beacon_trigger.py)
+  • POST /detection-event  — structured events from test_with_hand_recognition.py
   • POST /start-capture    — launches capture_user_bottles.py for a medication
   • GET  /capture-status/<session_id> — polls capture progress
+
+Also logs every beacon + detection event to Supabase.
 
 Run:
   cd /path/to/PillTek
@@ -229,30 +230,48 @@ except Exception as _cap_err:
 @app.route('/trigger', methods=['POST'])
 def trigger():
     """
-    ESP32 beacon webhook — unchanged from beacon_trigger.py.
-    Additionally logs beacon events to Supabase.
+    ESP32 beacon webhook. Spawns / terminates the detection subprocess and
+    logs each event to Supabase.
+
+    Expected JSON body (all fields optional):
+      { "event": "beacon_near" | "beacon_far",
+        "beacon_mac": "dd:34:02:0a:2d:f1" }
     """
     global _running_process
 
-    data  = request.get_json(silent=True) or {}
-    event = data.get('event', '')
-    print(f'[ESP32] event: {event}')
+    data       = request.get_json(silent=True) or {}
+    event      = data.get('event', '')
+    beacon_mac = (data.get('beacon_mac') or '').lower() or None
+    print(f'[ESP32] event={event} beacon_mac={beacon_mac}')
 
     if event == 'beacon_near':
-        _log_event('beacon_near', raw_meta={'source': 'esp32'})
+        _log_event('beacon_near', raw_meta={'source': 'esp32', 'beacon_mac': beacon_mac})
 
         if _running_process is None or _running_process.poll() is not None:
-            print('[Server] Starting detection subprocess...')
+            # Pass the operator-configured stream URL and weights through to the
+            # subprocess so it does not fall back to its own hardcoded defaults.
+            cmd = [
+                sys.executable, 'test_with_hand_recognition.py',
+                '--source',  _ESP32_STREAM_URL,
+                '--weights', _YOLO_WEIGHTS,
+            ]
+            # Ensure detection events come back to THIS server, regardless of
+            # what PILLTEK_BACKEND happens to be set to in the parent shell.
+            child_env = os.environ.copy()
+            child_env.setdefault(
+                'PILLTEK_BACKEND',
+                f"http://127.0.0.1:{os.environ.get('BACKEND_PORT', '5000')}",
+            )
+            print(f'[Server] Starting detection subprocess: {" ".join(cmd)}')
             _running_process = subprocess.Popen(
-                [sys.executable, 'test_with_hand_recognition.py'],
-                cwd=os.path.join(os.path.dirname(__file__), '..')
+                cmd, cwd=_REPO_ROOT, env=child_env,
             )
         else:
             print('[Server] Detection subprocess already running.')
         return 'ok'
 
     elif event == 'beacon_far':
-        _log_event('beacon_far', raw_meta={'source': 'esp32'})
+        _log_event('beacon_far', raw_meta={'source': 'esp32', 'beacon_mac': beacon_mac})
 
         if _running_process is not None and _running_process.poll() is None:
             print('[Server] Stopping detection subprocess...')
