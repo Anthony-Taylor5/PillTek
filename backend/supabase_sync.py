@@ -203,7 +203,7 @@ def update_model_status(model_id: str, status: str, **fields) -> None:
     payload = {"status": status, **fields}
     try:
         client.table("user_models").update(payload).eq("id", model_id).execute()
-        _log(f"user_models id={model_id} → status={status}")
+        _log(f"user_models id={model_id} -> status={status}")
     except Exception as e:
         _logerr(f"update_model_status failed: {e}")
 
@@ -223,7 +223,7 @@ def upload_model_weights(class_name: str, weights_path: Path,
         return None
     storage_path = f"{class_name}/v{version}/{weights_path.name}"
     size_mb = weights_path.stat().st_size / 1024 / 1024
-    _log(f"uploading weights → model-weights/{storage_path} ({size_mb:.1f} MB)")
+    _log(f"uploading weights -> model-weights/{storage_path} ({size_mb:.1f} MB)")
     try:
         with weights_path.open("rb") as fh:
             client.storage.from_(_BUCKET_WEIGHTS).upload(
