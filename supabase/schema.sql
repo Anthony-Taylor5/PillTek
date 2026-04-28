@@ -137,3 +137,12 @@ ALTER TABLE user_models DISABLE ROW LEVEL SECURITY;
 INSERT INTO storage.buckets (id, name, public)
   VALUES ('model-weights', 'model-weights', false)
   ON CONFLICT DO NOTHING;
+
+-- ── 2026-04-28: medications.label_code (KBeacon pipeline) ────────────────────
+-- Optional letter code used by the YOLO model class names ("Bottle A", etc.).
+-- Allowed values match the trained model's bottle classes; nullable so
+-- existing rows are unaffected.
+ALTER TABLE medications ADD COLUMN IF NOT EXISTS label_code text
+  CHECK (label_code IS NULL OR label_code IN ('A','B','D','F'));
+CREATE INDEX IF NOT EXISTS idx_medications_patient_label
+  ON medications (patient_id, label_code);
