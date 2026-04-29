@@ -203,136 +203,9 @@ git commit -m "Add pipeline_context module for label-to-medication mapping"
 
 ---
 
-## Task 3: Backend helper `_resolve_patient_by_beacon`
+## Task 3: ~~Beacon-MAC patient resolution~~ — REMOVED
 
-**Files:**
-- Modify: `backend/server.py` (insert helper near `_resolve_patient_id` at line 72)
-- Test: `tests/test_server_trigger.py` (create)
-
-- [ ] **Step 1: Write the failing test**
-
-Create `tests/test_server_trigger.py`:
-
-```python
-"""Tests for backend.server pipeline helpers and /trigger route."""
-import json
-from unittest.mock import MagicMock, patch
-import pytest
-
-
-@pytest.fixture
-def fake_db():
-    """A MagicMock supabase client with chainable .table().select().eq()… ."""
-    db = MagicMock()
-    return db
-
-
-def _stub_patients_query(db, mac, patient_row):
-    """Wire db.table('patients').select('id,caregiver_uid')
-            .eq('beacon_mac', mac).maybe_single().execute() → patient_row."""
-    table   = db.table.return_value
-    select  = table.select.return_value
-    eq      = select.eq.return_value
-    single  = eq.maybe_single.return_value
-    single.execute.return_value = MagicMock(data=patient_row)
-
-
-def test_resolve_patient_by_beacon_uses_mac_when_present(fake_db):
-    from backend import server
-    server._db = fake_db
-    server._patient_id = None
-    _stub_patients_query(
-        fake_db, 'aa:bb:cc:dd:ee:ff',
-        {'id': 'pid-mac', 'caregiver_uid': 'fb-uid-X'},
-    )
-    pid, caregiver = server._resolve_patient_by_beacon('AA:BB:CC:DD:EE:FF')
-    assert pid == 'pid-mac'
-    assert caregiver == 'fb-uid-X'
-    fake_db.table.assert_called_with('patients')
-    fake_db.table.return_value.select.return_value.eq.assert_called_with(
-        'beacon_mac', 'aa:bb:cc:dd:ee:ff',
-    )
-
-
-def test_resolve_patient_by_beacon_falls_back_to_patient_code(fake_db):
-    """If MAC lookup returns nothing, fall back to PATIENT_CODE env."""
-    from backend import server
-    server._db = fake_db
-    server._patient_id = None
-    server._PATIENT_CODE = 'PTK-FAKE'
-    _stub_patients_query(fake_db, 'aa:bb', None)
-
-    # second call — the code-based resolver
-    code_table  = MagicMock()
-    code_select = code_table.select.return_value
-    code_eq     = code_select.eq.return_value
-    code_single = code_eq.maybe_single.return_value
-    code_single.execute.return_value = MagicMock(data={'id': 'pid-code'})
-    fake_db.table.side_effect = [
-        # first call (mac lookup) returns the original chain
-        fake_db.table.return_value,
-        code_table,
-    ]
-    pid, caregiver = server._resolve_patient_by_beacon('aa:bb')
-    assert pid == 'pid-code'
-    assert caregiver is None
-
-
-def test_resolve_patient_by_beacon_returns_none_on_no_db(fake_db):
-    from backend import server
-    server._db = None
-    pid, caregiver = server._resolve_patient_by_beacon('aa:bb')
-    assert (pid, caregiver) == (None, None)
-```
-
-- [ ] **Step 2: Run test to confirm it fails**
-
-Run: `pytest tests/test_server_trigger.py::test_resolve_patient_by_beacon_uses_mac_when_present -v`
-Expected: AttributeError on `server._resolve_patient_by_beacon`.
-
-- [ ] **Step 3: Implement helper in `backend/server.py`**
-
-Insert after the existing `_resolve_patient_id` function (after line 86):
-
-```python
-def _resolve_patient_by_beacon(beacon_mac: str | None) -> tuple[str | None, str | None]:
-    """Resolve (patient_id, caregiver_uid) by BLE MAC address.
-
-    Falls back to PATIENT_CODE env-based lookup if mac is None or unmapped.
-    Returns (None, None) if Supabase is not configured.
-    """
-    if not _db:
-        return (None, None)
-    if beacon_mac:
-        try:
-            res = (
-                _db.table('patients')
-                   .select('id,caregiver_uid')
-                   .eq('beacon_mac', beacon_mac.lower())
-                   .maybe_single()
-                   .execute()
-            )
-            if res and res.data:
-                print(f'[Pipeline] beacon→patient: {beacon_mac} → {res.data["id"]}')
-                return (res.data['id'], res.data.get('caregiver_uid'))
-        except Exception as e:
-            print(f'[Pipeline] beacon→patient lookup failed: {e}')
-
-    # Fallback: PATIENT_CODE env var (existing behavior)
-    return (_resolve_patient_id(), None)
-```
-
-- [ ] **Step 4: Run tests to confirm they pass**
-
-Run: `pytest tests/test_server_trigger.py -v -k resolve_patient`
-Expected: 3 passed.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add backend/server.py tests/test_server_trigger.py
-git commit -m "Resolve patient by beacon MAC with PATIENT_CODE fallback"
-```
+This task is dropped. The deployment is one ESP32 paired to one patient (Anthony Taylor), pinned via the existing `PATIENT_CODE` env var. `backend/server.py:_resolve_patient_id()` already handles that lookup. No new helper is needed; downstream tasks call `_resolve_patient_id()` directly.
 
 ---
 
@@ -432,7 +305,7 @@ git commit -m "Fetch allowed-label medications from Supabase by patient"
 ## Task 5: Enrich `/trigger` to pass medication context to detection
 
 **Files:**
-- Modify: `backend/server.py` lines 229–289 (the `/trigger` route)
+- Modify: `backend/server.py` (the `/trigger` route)
 - Modify: `tests/test_server_trigger.py` (append /trigger tests)
 
 - [ ] **Step 1: Append the failing test**
@@ -444,27 +317,17 @@ def test_trigger_beacon_near_passes_label_map_via_env(fake_db, monkeypatch):
     from backend import server
 
     server._db = fake_db
-    server._patient_id = None
+    server._patient_id = 'pid-1'   # PATIENT_CODE-resolved id is cached on the module
     server._running_process = None
     monkeypatch.setattr(server, '_ESP32_STREAM_URL', 'http://esp32/stream')
     monkeypatch.setattr(server, '_YOLO_WEIGHTS',     '/weights/best.pt')
 
-    # patient lookup
-    _stub_patients_query(
-        fake_db, 'aa:bb:cc:dd:ee:ff',
-        {'id': 'pid-1', 'caregiver_uid': 'fb-X'},
-    )
-    # medications query (second .table call)
-    meds_table = MagicMock()
-    meds_chain = meds_table.select.return_value.eq.return_value
+    # medications query
+    meds_chain = fake_db.table.return_value.select.return_value.eq.return_value
     meds_chain.execute.return_value = MagicMock(data=[
         {'id': 'u-A', 'name': 'Advil',   'label_code': 'A'},
         {'id': 'u-D', 'name': 'Lipitor', 'label_code': 'D'},
     ])
-    fake_db.table.side_effect = [
-        fake_db.table.return_value,   # patients lookup chain stays as-is
-        meds_table,
-    ]
 
     captured = {}
     def fake_popen(cmd, cwd=None, env=None, **kw):
@@ -476,10 +339,7 @@ def test_trigger_beacon_near_passes_label_map_via_env(fake_db, monkeypatch):
 
     with patch.object(server.subprocess, 'Popen', side_effect=fake_popen):
         client = server.app.test_client()
-        resp = client.post('/trigger', json={
-            'event':      'beacon_near',
-            'beacon_mac': 'aa:bb:cc:dd:ee:ff',
-        })
+        resp = client.post('/trigger', json={'event': 'beacon_near'})
     assert resp.status_code == 200
     assert '--source'  in captured['cmd']
     assert '--weights' in captured['cmd']
@@ -502,7 +362,7 @@ Expected: AssertionError — current `/trigger` does not set `PILLTEK_LABEL_MAP`
 
 - [ ] **Step 3: Replace the `/trigger` route**
 
-In `backend/server.py`, replace the entire `/trigger` route (currently at lines 229–289 after the Task 0 merge edit):
+In `backend/server.py`, replace the entire `/trigger` route:
 
 ```python
 @app.route('/trigger', methods=['POST'])
@@ -510,9 +370,9 @@ def trigger():
     """ESP32 beacon webhook. Spawns / terminates the detection subprocess
     and logs each event to Supabase, with per-patient medication context.
 
-    Expected JSON body (all fields optional):
+    Expected JSON body:
       { "event": "beacon_near" | "beacon_far",
-        "beacon_mac": "dd:34:02:0a:2d:f1" }
+        "beacon_mac": "dd:34:02:0a:2d:f1"   // optional, logged only }
     """
     global _running_process
 
@@ -522,8 +382,8 @@ def trigger():
     print(f'[ESP32] event={event} beacon_mac={beacon_mac}')
 
     if event == 'beacon_near':
-        patient_id, caregiver_uid = _resolve_patient_by_beacon(beacon_mac)
-        label_map = _fetch_allowed_medications(patient_id)
+        patient_id = _resolve_patient_id()
+        label_map  = _fetch_allowed_medications(patient_id)
         _log_event('beacon_near', raw_meta={
             'source':         'esp32',
             'beacon_mac':     beacon_mac,
@@ -545,8 +405,6 @@ def trigger():
             child_env['PILLTEK_LABEL_MAP'] = json.dumps(label_map)
             if patient_id:
                 child_env['PILLTEK_PATIENT_ID'] = patient_id
-            if caregiver_uid:
-                child_env['PILLTEK_CAREGIVER_UID'] = caregiver_uid
             print(
                 f'[Pipeline] starting detection: patient={patient_id} '
                 f'labels={sorted(label_map)} cmd={" ".join(cmd)}'
@@ -754,24 +612,17 @@ def test_pipeline_debug_returns_resolved_context(fake_db):
     """Simulates the full lookup path without spawning a subprocess."""
     from backend import server
     server._db = fake_db
-    server._patient_id = None
-    _stub_patients_query(
-        fake_db, 'aa:bb',
-        {'id': 'pid-1', 'caregiver_uid': 'fb-X'},
-    )
-    meds_table = MagicMock()
-    meds_chain = meds_table.select.return_value.eq.return_value
+    server._patient_id = 'pid-1'   # PATIENT_CODE already resolved
+    meds_chain = fake_db.table.return_value.select.return_value.eq.return_value
     meds_chain.execute.return_value = MagicMock(data=[
         {'id': 'u-A', 'name': 'Advil', 'label_code': 'A'},
     ])
-    fake_db.table.side_effect = [fake_db.table.return_value, meds_table]
     client = server.app.test_client()
-    resp = client.post('/pipeline-debug', json={'beacon_mac': 'aa:bb'})
+    resp = client.post('/pipeline-debug', json={})
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body['patient_id']    == 'pid-1'
-    assert body['caregiver_uid'] == 'fb-X'
-    assert body['label_map']     == {'A': 'u-A'}
+    assert body['patient_id'] == 'pid-1'
+    assert body['label_map']  == {'A': 'u-A'}
     assert body['env_preview']['PILLTEK_LABEL_MAP'] == '{"A": "u-A"}'
 ```
 
@@ -790,21 +641,16 @@ def pipeline_debug():
     """Diagnostic: run the patient + label map lookup that /trigger would,
     without spawning the detection subprocess. Useful for verifying that
     Supabase data is shaped correctly for the trigger flow."""
-    data       = request.get_json(silent=True) or {}
-    beacon_mac = (data.get('beacon_mac') or '').lower() or None
-    patient_id, caregiver_uid = _resolve_patient_by_beacon(beacon_mac)
-    label_map  = _fetch_allowed_medications(patient_id)
+    patient_id  = _resolve_patient_id()
+    label_map   = _fetch_allowed_medications(patient_id)
     env_preview = {
-        'PILLTEK_LABEL_MAP':    json.dumps(label_map),
-        'PILLTEK_PATIENT_ID':   patient_id or '',
-        'PILLTEK_CAREGIVER_UID': caregiver_uid or '',
+        'PILLTEK_LABEL_MAP':  json.dumps(label_map),
+        'PILLTEK_PATIENT_ID': patient_id or '',
     }
     return jsonify({
-        'beacon_mac':    beacon_mac,
-        'patient_id':    patient_id,
-        'caregiver_uid': caregiver_uid,
-        'label_map':     label_map,
-        'env_preview':   env_preview,
+        'patient_id':  patient_id,
+        'label_map':   label_map,
+        'env_preview': env_preview,
     }), 200
 ```
 
