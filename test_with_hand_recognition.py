@@ -23,13 +23,45 @@ _BACKEND_URL = os.environ.get('PILLTEK_BACKEND', 'http://127.0.0.1:5000')
 # Prevents flooding the backend when a hand stays on a bottle.
 _EVENT_DEBOUNCE_SECS = 5.0
 
-# Maps YOLO class id → medication UUID in Supabase.
-# Populate this with real values from your 'medications' table once meds are created.
-# Example: CLASS_TO_MED_ID = { 1: "uuid-for-bottle-a", 2: "uuid-for-bottle-b" }
+# Hydrated at runtime from the PILLTEK_LABEL_MAP env var (set by backend /trigger).
+# Format of env var: JSON object {"A": "<med-uuid>", "B": "<med-uuid>", ...}.
+# Fully empty by default — detection still runs but never marks medications taken.
+import json as _json
+import re  as _re
+
 CLASS_TO_MED_ID: dict[int, str] = {}
+_LABEL_MED_MAP: dict[str, str]  = _json.loads(os.environ.get('PILLTEK_LABEL_MAP', '{}'))
+_PATIENT_ID:    str | None       = os.environ.get('PILLTEK_PATIENT_ID') or None
 
 _CLASS_NAMES_GLOBAL: list[str] = []          # set in run_infer after model load
 _last_event_time:    dict[int, float] = {}   # per-class debounce tracker
+
+_TRAILING_LETTER = _re.compile(r'\b([A-Za-z])\s*$')
+
+
+def hydrate_class_to_med_id(model_names) -> dict[int, str]:
+    """Return {class_id: medication_id} from model.names + _LABEL_MED_MAP.
+
+    Accepts model.names as either a dict {id: name} or a list [name, ...].
+    Pure helper; populates the module-global CLASS_TO_MED_ID as a side
+    effect for callers that already read it.
+    """
+    items = enumerate(model_names) if isinstance(model_names, list) else model_names.items()
+    out: dict[int, str] = {}
+    for class_id, name in items:
+        m = _TRAILING_LETTER.search(name or '')
+        if not m:
+            continue
+        med = _LABEL_MED_MAP.get(m.group(1).upper())
+        if med:
+            out[int(class_id)] = med
+    CLASS_TO_MED_ID.clear()
+    CLASS_TO_MED_ID.update(out)
+    if out:
+        print(f'[Pipeline] CLASS_TO_MED_ID hydrated: {out}')
+    else:
+        print('[Pipeline] CLASS_TO_MED_ID empty — no allowed-label classes found')
+    return out
 
 
 def post_detection_event(event_type: str, bottle_class: int, confidence: float) -> None:
@@ -54,6 +86,8 @@ def post_detection_event(event_type: str, bottle_class: int, confidence: float) 
     }
     if med_id:
         payload['medication_id'] = med_id
+    if _PATIENT_ID:
+        payload['patient_id'] = _PATIENT_ID
 
     def _post():
         try:
@@ -447,6 +481,9 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
     pill_model  = YOLO(str(weights))
     class_names = [pill_model.names[i] for i in sorted(pill_model.names.keys())]
 
+    # Hydrate label map from env so detection events include medication_id
+    hydrate_class_to_med_id(pill_model.names)
+
     base_options = mp_python.BaseOptions(model_asset_path=HAND_MODEL_PATH)
     hand_options = mp_vision.HandLandmarkerOptions(
         base_options=base_options,
@@ -542,7 +579,7 @@ DATASETS = {
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run YOLO + MediaPipe hand detection inference.")
     parser.add_argument("--weights", default="runs/detect/runs/train_v10/weights/best.pt", help="Path to YOLO weights (.pt)")
-    parser.add_argument("--source",  default="http://192.168.0.31:81/stream",
+    parser.add_argument("--source",  default="http://192.168.0.211:81/stream",
                         help="Video source: ESP32 stream URL or webcam index (0, 1, 2...)")
     parser.add_argument("--conf",    type=float, default=0.50, help="Confidence threshold")
     parser.add_argument("--imgsz",   type=int,   default=640,  help="Image size")
