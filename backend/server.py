@@ -23,6 +23,7 @@ Environment variables (copy .env.example → .env and fill in):
   YOLO_WEIGHTS          — path to YOLO weights used for capture fine-tuning
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -256,13 +257,12 @@ except Exception as _cap_err:
 
 @app.route('/trigger', methods=['POST'])
 def trigger():
-    """
-    ESP32 beacon webhook. Spawns / terminates the detection subprocess and
-    logs each event to Supabase.
+    """ESP32 beacon webhook. Spawns / terminates the detection subprocess
+    and logs each event to Supabase, with per-patient medication context.
 
-    Expected JSON body (all fields optional):
+    Expected JSON body:
       { "event": "beacon_near" | "beacon_far",
-        "beacon_mac": "dd:34:02:0a:2d:f1" }
+        "beacon_mac": "dd:34:02:0a:2d:f1"   // optional, logged only }
     """
     global _running_process
 
@@ -272,34 +272,40 @@ def trigger():
     print(f'[ESP32] event={event} beacon_mac={beacon_mac}')
 
     if event == 'beacon_near':
-        _log_event('beacon_near', raw_meta={'source': 'esp32', 'beacon_mac': beacon_mac})
+        patient_id = _resolve_patient_id()
+        label_map  = _fetch_allowed_medications(patient_id)
+        _log_event('beacon_near', raw_meta={
+            'source':         'esp32',
+            'beacon_mac':     beacon_mac,
+            'patient_id':     patient_id,
+            'label_map_keys': sorted(label_map.keys()),
+        })
 
         if _running_process is None or _running_process.poll() is not None:
-            # Pass the operator-configured stream URL and weights through to the
-            # subprocess so it does not fall back to its own hardcoded defaults.
             cmd = [
                 sys.executable, 'test_with_hand_recognition.py',
                 '--source',  _ESP32_STREAM_URL,
                 '--weights', _YOLO_WEIGHTS,
             ]
-            # Ensure detection events come back to THIS server, regardless of
-            # what PILLTEK_BACKEND happens to be set to in the parent shell.
             child_env = os.environ.copy()
             child_env.setdefault(
                 'PILLTEK_BACKEND',
                 f"http://127.0.0.1:{os.environ.get('BACKEND_PORT', '5000')}",
             )
-            print(f'[Server] Starting detection subprocess: {" ".join(cmd)}')
-            _running_process = subprocess.Popen(
-                cmd, cwd=_REPO_ROOT, env=child_env,
+            child_env['PILLTEK_LABEL_MAP'] = json.dumps(label_map)
+            if patient_id:
+                child_env['PILLTEK_PATIENT_ID'] = patient_id
+            print(
+                f'[Pipeline] starting detection: patient={patient_id} '
+                f'labels={sorted(label_map)} cmd={" ".join(cmd)}'
             )
+            _running_process = subprocess.Popen(cmd, cwd=_REPO_ROOT, env=child_env)
         else:
             print('[Server] Detection subprocess already running.')
         return 'ok'
 
     elif event == 'beacon_far':
         _log_event('beacon_far', raw_meta={'source': 'esp32', 'beacon_mac': beacon_mac})
-
         if _running_process is not None and _running_process.poll() is None:
             print('[Server] Stopping detection subprocess...')
             _running_process.terminate()
@@ -311,8 +317,7 @@ def trigger():
         _running_process = None
         return 'ok'
 
-    else:
-        return jsonify({'error': 'invalid event'}), 400
+    return jsonify({'error': 'invalid event'}), 400
 
 
 @app.route('/detection-event', methods=['POST'])
