@@ -23,7 +23,7 @@ def build_label_med_map(medications: Iterable[Mapping]) -> dict[str, str]:
     """
     out: dict[str, str] = {}
     for m in medications:
-        code = (m.get('label_code') or '').strip().upper()
+        code = (m.get('label') or '').strip().upper()
         if code in ALLOWED_LABELS:
             out[code] = m['id']
     return out

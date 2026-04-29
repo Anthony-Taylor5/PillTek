@@ -14,10 +14,10 @@ def test_fetch_allowed_medications_filters_to_allowed_set(fake_db):
     from backend import server
     server._db = fake_db
     rows = [
-        {'id': 'u-A', 'name': 'Advil',   'label_code': 'A'},
-        {'id': 'u-X', 'name': 'NoLabel', 'label_code': None},
-        {'id': 'u-D', 'name': 'Lipitor', 'label_code': 'D'},
-        {'id': 'u-C', 'name': 'Aspirin', 'label_code': 'C'},
+        {'id': 'u-A', 'name': 'Advil',   'label': 'A'},
+        {'id': 'u-X', 'name': 'NoLabel', 'label': None},
+        {'id': 'u-D', 'name': 'Lipitor', 'label': 'D'},
+        {'id': 'u-C', 'name': 'Aspirin', 'label': 'C'},
     ]
     chain = fake_db.table.return_value.select.return_value.eq.return_value
     chain.execute.return_value = MagicMock(data=rows)
@@ -44,8 +44,8 @@ def test_trigger_beacon_near_passes_label_map_via_env(fake_db, monkeypatch):
     # medications query
     meds_chain = fake_db.table.return_value.select.return_value.eq.return_value
     meds_chain.execute.return_value = MagicMock(data=[
-        {'id': 'u-A', 'name': 'Advil',   'label_code': 'A'},
-        {'id': 'u-D', 'name': 'Lipitor', 'label_code': 'D'},
+        {'id': 'u-A', 'name': 'Advil',   'label': 'A'},
+        {'id': 'u-D', 'name': 'Lipitor', 'label': 'D'},
     ])
 
     captured = {}
@@ -81,7 +81,7 @@ def test_pipeline_debug_returns_resolved_context(fake_db):
     server._patient_id = 'pid-1'   # PATIENT_CODE already resolved
     meds_chain = fake_db.table.return_value.select.return_value.eq.return_value
     meds_chain.execute.return_value = MagicMock(data=[
-        {'id': 'u-A', 'name': 'Advil', 'label_code': 'A'},
+        {'id': 'u-A', 'name': 'Advil', 'label': 'A'},
     ])
     client = server.app.test_client()
     resp = client.post('/pipeline-debug', json={})

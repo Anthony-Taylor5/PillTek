@@ -13,11 +13,11 @@ def test_allowed_labels_is_the_required_set():
 
 def test_build_label_med_map_keeps_allowed_only():
     meds = [
-        {'id': 'u-A', 'name': 'Advil',   'label_code': 'A'},
-        {'id': 'u-B', 'name': 'Tylenol', 'label_code': 'B'},
-        {'id': 'u-C', 'name': 'Aspirin', 'label_code': 'C'},   # not allowed
-        {'id': 'u-N', 'name': 'NoLabel', 'label_code': None},
-        {'id': 'u-D', 'name': 'Lipitor', 'label_code': 'd'},   # case-insensitive
+        {'id': 'u-A', 'name': 'Advil',   'label': 'A'},
+        {'id': 'u-B', 'name': 'Tylenol', 'label': 'B'},
+        {'id': 'u-C', 'name': 'Aspirin', 'label': 'C'},   # not allowed
+        {'id': 'u-N', 'name': 'NoLabel', 'label': None},
+        {'id': 'u-D', 'name': 'Lipitor', 'label': 'd'},   # case-insensitive
     ]
     assert build_label_med_map(meds) == {'A': 'u-A', 'B': 'u-B', 'D': 'u-D'}
 

@@ -106,8 +106,11 @@ ALTER TABLE detection_events DISABLE ROW LEVEL SECURITY;
 -- ── 2026-04-28: label column on medications ──────────────────────────────────
 -- Slot label A–F assigned to each bottle in the dispenser.
 -- Each patient is limited to 4 medications (enforced in app).
+-- Also used by the KBeacon pipeline to map YOLO bottle classes to medications.
 ALTER TABLE medications ADD COLUMN IF NOT EXISTS label text
-  CHECK (label IN ('A','B','D','F'));
+  CHECK (label IS NULL OR label IN ('A','B','D','F'));
+CREATE INDEX IF NOT EXISTS idx_medications_patient_label
+  ON medications (patient_id, label);
 
 -- ── 2026-04-26: bottle_images extension + user_models + model-weights bucket ──
 
@@ -144,11 +147,3 @@ INSERT INTO storage.buckets (id, name, public)
   VALUES ('model-weights', 'model-weights', false)
   ON CONFLICT DO NOTHING;
 
--- ── 2026-04-28: medications.label_code (KBeacon pipeline) ────────────────────
--- Optional letter code used by the YOLO model class names ("Bottle A", etc.).
--- Allowed values match the trained model's bottle classes; nullable so
--- existing rows are unaffected.
-ALTER TABLE medications ADD COLUMN IF NOT EXISTS label_code text
-  CHECK (label_code IS NULL OR label_code IN ('A','B','D','F'));
-CREATE INDEX IF NOT EXISTS idx_medications_patient_label
-  ON medications (patient_id, label_code);

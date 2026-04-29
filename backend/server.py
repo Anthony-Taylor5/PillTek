@@ -96,13 +96,13 @@ def _resolve_patient_id() -> str | None:
 
 
 def _fetch_allowed_medications(patient_id: str | None) -> dict[str, str]:
-    """Return {label_code: medication_id} for the patient's allowed-label meds."""
+    """Return {label: medication_id} for the patient's allowed-label meds."""
     if not _db or not patient_id:
         return {}
     try:
         res = (
             _db.table('medications')
-               .select('id,name,label_code')
+               .select('id,name,label')
                .eq('patient_id', patient_id)
                .execute()
         )
