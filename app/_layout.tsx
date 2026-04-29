@@ -35,13 +35,7 @@ export default function Layout() {
       <Stack.Screen name="caregiver-calendar" options={{ title: "Calendar" }} />
       <Stack.Screen name="self-logs" options={{ title: "My Logs" }} />
 
-      {/* Shared onboarding */}
-      <Stack.Screen
-        name="capture-bottles"
-        options={{ title: "Capture Bottles", headerBackVisible: false }}
-      />
-
-<Stack.Screen name="modal" options={{ presentation: "modal" }} />
+      <Stack.Screen name="modal" options={{ presentation: "modal" }} />
     </Stack>
   );
 }

@@ -103,6 +103,12 @@ ALTER TABLE detection_events DISABLE ROW LEVEL SECURITY;
 --   VALUES ('bottle-images', 'bottle-images', false)
 --   ON CONFLICT DO NOTHING;
 
+-- ── 2026-04-28: label column on medications ──────────────────────────────────
+-- Slot label A–F assigned to each bottle in the dispenser.
+-- Each patient is limited to 4 medications (enforced in app).
+ALTER TABLE medications ADD COLUMN IF NOT EXISTS label text
+  CHECK (label IN ('A','B','D','F'));
+
 -- ── 2026-04-26: bottle_images extension + user_models + model-weights bucket ──
 
 -- Extend bottle_images (backward-compatible). Existing mobile-app rows that set

@@ -130,7 +130,7 @@ export default function PatientDetail() {
         {loading && <ActivityIndicator color="#366a53" style={{ marginTop: 16 }} />}
         <FlatList
           data={meds}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item.id ?? item.name}
           renderItem={({ item }) => (
             <DashboardRow
               label={item.name}
