@@ -65,6 +65,13 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(__file__))
     import supabase_sync  # type: ignore[no-redef]
 
+# ── Pipeline context (medication label mapping) ───────────────────────────────
+try:
+    from backend.pipeline_context import build_label_med_map
+except ImportError:
+    sys.path.insert(0, os.path.dirname(__file__))
+    from pipeline_context import build_label_med_map  # type: ignore[no-redef]
+
 # ── Patient lookup ────────────────────────────────────────────────────────────
 _PATIENT_CODE = os.environ.get('PATIENT_CODE', '').strip().upper()
 _patient_id: str | None = None  # UUID resolved on first use
@@ -85,6 +92,26 @@ def _resolve_patient_id() -> str | None:
     except Exception as e:
         print(f'[Supabase] Patient lookup failed: {e}')
     return _patient_id
+
+
+def _fetch_allowed_medications(patient_id: str | None) -> dict[str, str]:
+    """Return {label_code: medication_id} for the patient's allowed-label meds."""
+    if not _db or not patient_id:
+        return {}
+    try:
+        res = (
+            _db.table('medications')
+               .select('id,name,label_code')
+               .eq('patient_id', patient_id)
+               .execute()
+        )
+        meds = res.data or []
+        out  = build_label_med_map(meds)
+        print(f'[Pipeline] patient {patient_id}: label_map={out}')
+        return out
+    except Exception as e:
+        print(f'[Pipeline] _fetch_allowed_medications failed: {e}')
+        return {}
 
 
 def _log_event(event_type: str, **kwargs) -> None:
