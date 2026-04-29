@@ -212,14 +212,26 @@ This task is dropped. The deployment is one ESP32 paired to one patient (Anthony
 ## Task 4: Backend helper `_fetch_allowed_medications`
 
 **Files:**
-- Modify: `backend/server.py` (insert after `_resolve_patient_by_beacon`)
-- Modify: `tests/test_server_trigger.py` (append tests)
+- Modify: `backend/server.py` (insert after `_resolve_patient_id`)
+- Create: `tests/test_server_trigger.py`
 
-- [ ] **Step 1: Append the failing test**
+- [ ] **Step 1: Write the failing test (creates the file)**
 
-Add to `tests/test_server_trigger.py`:
+Create `tests/test_server_trigger.py` with shared imports + a `fake_db` fixture used by every test in this file:
 
 ```python
+"""Tests for backend.server pipeline helpers and routes."""
+import json
+from unittest.mock import MagicMock, patch
+import pytest
+
+
+@pytest.fixture
+def fake_db():
+    """A MagicMock supabase client with chainable .table().select().eq()… ."""
+    return MagicMock()
+
+
 def test_fetch_allowed_medications_filters_to_allowed_set(fake_db):
     from backend import server
     server._db = fake_db
