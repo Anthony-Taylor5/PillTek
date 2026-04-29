@@ -72,3 +72,21 @@ def test_trigger_invalid_event_returns_400(fake_db):
     client = server.app.test_client()
     resp = client.post('/trigger', json={'event': 'nonsense'})
     assert resp.status_code == 400
+
+
+def test_pipeline_debug_returns_resolved_context(fake_db):
+    """Simulates the full lookup path without spawning a subprocess."""
+    from backend import server
+    server._db = fake_db
+    server._patient_id = 'pid-1'   # PATIENT_CODE already resolved
+    meds_chain = fake_db.table.return_value.select.return_value.eq.return_value
+    meds_chain.execute.return_value = MagicMock(data=[
+        {'id': 'u-A', 'name': 'Advil', 'label_code': 'A'},
+    ])
+    client = server.app.test_client()
+    resp = client.post('/pipeline-debug', json={})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['patient_id'] == 'pid-1'
+    assert body['label_map']  == {'A': 'u-A'}
+    assert body['env_preview']['PILLTEK_LABEL_MAP'] == '{"A": "u-A"}'

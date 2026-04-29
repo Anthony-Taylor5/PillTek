@@ -761,6 +761,24 @@ def capture_status(session_id):
     }), 200
 
 
+@app.route('/pipeline-debug', methods=['POST'])
+def pipeline_debug():
+    """Diagnostic: run the patient + label map lookup that /trigger would,
+    without spawning the detection subprocess. Useful for verifying that
+    Supabase data is shaped correctly for the trigger flow."""
+    patient_id  = _resolve_patient_id()
+    label_map   = _fetch_allowed_medications(patient_id)
+    env_preview = {
+        'PILLTEK_LABEL_MAP':  json.dumps(label_map),
+        'PILLTEK_PATIENT_ID': patient_id or '',
+    }
+    return jsonify({
+        'patient_id':  patient_id,
+        'label_map':   label_map,
+        'env_preview': env_preview,
+    }), 200
+
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
