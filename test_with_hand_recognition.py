@@ -400,27 +400,64 @@ GRAB_PADDING = 10  # pixels to expand bottle box in each direction for grab dete
 GRAB_HISTORY_LEN = 16  # number of frames to smooth over
 _grab_history: dict[int, list[bool]] = {}  # per-hand history
 
-def hand_overlaps_bottle(hand_idx: int, hand_landmarks, bottle_boxes, frame_shape) -> bool:
+# Minimum YOLO confidence required before a hand-bottle overlap is reported
+# to the backend. Below this, we still draw the orange box (visual feedback)
+# but suppress the detection-event POST to avoid recording uncertain bottles
+# as "Taken".
+EVENT_BOTTLE_CONF_THRESHOLD = 0.80
+
+# Per-hand cache of the most recent bottle that had a raw overlap. Used so the
+# smoothed "yes" decision can name a bottle even on the exact frame the hand is
+# briefly off the box.
+_last_overlap_bottle: dict[int, tuple[int, float]] = {}
+
+
+def hand_overlaps_bottle(hand_idx: int, hand_landmarks, bottle_boxes, frame_shape):
+    """Returns (overlapping, bottle_cls, bottle_conf).
+
+    overlapping is the smoothed yes/no over the last GRAB_HISTORY_LEN frames
+    (same as before). When it's True, bottle_cls/bottle_conf identify which
+    bottle the hand is on right now, falling back to the most recent overlap
+    if this exact frame has no raw hit. When False, both are None.
+
+    IMPORTANT: must be called exactly once per hand per frame, since each call
+    appends to _grab_history. Callers share the result for both drawing and
+    event firing.
+    """
     h, w = frame_shape[:2]
     points = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
-    raw = False
-    for (x1, y1, x2, y2, _, _) in bottle_boxes:
+    raw_hit       = False
+    cur_cls       = None
+    cur_conf      = None
+    for (x1, y1, x2, y2, cls, conf) in bottle_boxes:
         px1, py1 = x1 - GRAB_PADDING, y1 - GRAB_PADDING
         px2, py2 = x2 + GRAB_PADDING, y2 + GRAB_PADDING
         for (hx, hy) in points:
             if px1 <= hx <= px2 and py1 <= hy <= py2:
-                raw = True
+                raw_hit  = True
+                cur_cls  = cls
+                cur_conf = conf
                 break
-        if raw:
+        if raw_hit:
             break
 
     history = _grab_history.setdefault(hand_idx, [])
-    history.append(raw)
+    history.append(raw_hit)
     if len(history) > GRAB_HISTORY_LEN:
         history.pop(0)
 
-    # only flip state when the majority of recent frames agree
-    return sum(history) > len(history) / 2
+    if raw_hit:
+        _last_overlap_bottle[hand_idx] = (cur_cls, cur_conf)
+
+    overlapping = sum(history) > len(history) / 2
+    if not overlapping:
+        return False, None, None
+    if cur_cls is not None:
+        return True, cur_cls, cur_conf
+    prev = _last_overlap_bottle.get(hand_idx)
+    if prev is not None:
+        return True, prev[0], prev[1]
+    return False, None, None
 
 
 def draw_pill_boxes(frame, bottle_boxes, class_names):
@@ -435,12 +472,18 @@ def draw_pill_boxes(frame, bottle_boxes, class_names):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
 
 
-def draw_hands(frame, hand_results, bottle_boxes):
+def draw_hands(frame, hand_results, bottle_boxes, hand_overlap_results):
+    """`hand_overlap_results` is a list of (overlapping, cls, conf) tuples,
+    one per hand, precomputed by the caller so we don't double-append to
+    _grab_history (drawing and event firing share one decision per frame)."""
     if hand_results is None or not hand_results.hand_landmarks:
         return
     h, w = frame.shape[:2]
     for hand_idx, hand_landmarks in enumerate(hand_results.hand_landmarks):
-        overlapping = hand_overlaps_bottle(hand_idx, hand_landmarks, bottle_boxes, frame.shape)
+        overlapping = (
+            hand_overlap_results[hand_idx][0]
+            if hand_idx < len(hand_overlap_results) else False
+        )
         color       = HAND_OVERLAP_COLOR if overlapping else HAND_COLOR
         points      = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
         for (a, b) in HAND_CONNECTIONS:
@@ -516,6 +559,11 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
     start_ms = int(time.time() * 1000)
     no_frame_warned = False
 
+    # FPS instrumentation: print main-loop fps every second so we can see
+    # what is actually slowing down (hand inference vs drawing vs stream).
+    fps_t0 = time.monotonic()
+    fps_n  = 0
+
     while True:
         ok, frame = cap.read()
         if not ok or frame is None:
@@ -537,25 +585,41 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
         hand_snap    = hand_worker.get_result()
         bottle_boxes = get_bottle_boxes(pill_snap)
 
+        # Compute overlap once per hand per frame — single source of truth
+        # for the orange-box visualization AND the backend event POST.
+        hand_overlap_results: list[tuple[bool, int | None, float | None]] = []
+        if hand_snap is not None and hand_snap.hand_landmarks:
+            for hi, hand_lms in enumerate(hand_snap.hand_landmarks):
+                hand_overlap_results.append(
+                    hand_overlaps_bottle(hi, hand_lms, bottle_boxes, frame.shape)
+                )
+
         draw_pill_boxes(frame, bottle_boxes, class_names)
-        draw_hands(frame, hand_snap, bottle_boxes)
+        draw_hands(frame, hand_snap, bottle_boxes, hand_overlap_results)
         draw_legend(frame, class_names)
 
         # ── Report overlap events to the backend ──────────────────────────────
-        if hand_snap is not None and hand_snap.hand_landmarks and bottle_boxes:
-            for hi, hand_lms in enumerate(hand_snap.hand_landmarks):
-                if hand_overlaps_bottle(hi, hand_lms, bottle_boxes, frame.shape):
-                    # Find the highest-confidence overlapping bottle class.
-                    best_cls  = bottle_boxes[0][4]
-                    best_conf = bottle_boxes[0][5]
-                    for (_, _, _, _, cls, conf) in bottle_boxes:
-                        if conf > best_conf:
-                            best_cls, best_conf = cls, conf
-                    post_detection_event('hand_bottle_overlap', best_cls, best_conf)
+        # Fires only when the smoother says this hand is grabbing AND we know
+        # which bottle. The class/conf come from the same overlap check the
+        # orange box uses, so what you see is what gets posted.
+        for (overlapping, cls, conf) in hand_overlap_results:
+            if overlapping and cls is not None and conf is not None \
+                    and conf >= EVENT_BOTTLE_CONF_THRESHOLD:
+                post_detection_event('hand_bottle_overlap', cls, conf)
 
         cv2.imshow(window_name, frame)
         if (cv2.waitKey(1) & 0xFF) == ord("q"):
             break
+
+        fps_n += 1
+        now = time.monotonic()
+        if now - fps_t0 >= 1.0:
+            hand_count = (
+                len(hand_snap.hand_landmarks) if hand_snap is not None and hand_snap.hand_landmarks else 0
+            )
+            print(f'[Loop] {fps_n / (now - fps_t0):.1f} fps  hands={hand_count}  bottles={len(bottle_boxes)}')
+            fps_n  = 0
+            fps_t0 = now
 
     pill_worker.stop()
     hand_worker.stop()
