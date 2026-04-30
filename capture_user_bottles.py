@@ -8,8 +8,8 @@ Usage:
     python capture_user_bottles.py --weights runs/detect/runs/train_v10/weights/best.pt
 
     #hotspot
-    python capture_user_bottles.py --weights runs/detect/runs/train_v10/weights/best.pt --source http://192.168.0.211:81/stream 
-   
+    python capture_user_bottles.py --weights runs/detect/runs/train_v10/weights/best.pt --source http://192.168.0.211:81/stream
+
     #home
     python capture_user_bottles.py --weights runs/detect/runs/train_v10/weights/best.pt --source http://192.168.0.31:81/stream
 
@@ -645,7 +645,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--source",
-        default="http://192.168.0.31:81/stream",
+        default="http://192.168.0.211:81/stream",
         help="Video source: ESP32 stream URL or webcam index (0, 1, 2...)",
     )
     parser.add_argument("--epochs",    type=int, default=30,      help="Fine-tune epochs (default: 30)")

@@ -1,7 +1,7 @@
 task: detect
 mode: train
 model: C:\Users\Anthony\Documents\CS490\code\runs\detect\runs\train_v10\weights\best.pt
-data: C:\Users\Anthony\Documents\CS490\code\user_bottles\test_user_bottle_1\data.yaml
+data: C:\Users\Anthony\Documents\CS490\code\user_bottles\anthony_taylor_advil\data.yaml
 epochs: 30
 time: null
 patience: 100

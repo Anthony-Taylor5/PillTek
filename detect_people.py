@@ -36,7 +36,7 @@ print("Loading model...")
 model = YOLO('yolov5s.pt')
 print("Model loaded!")
 
-STREAM_URL = "http://192.168.0.211:81/stream" #'http://172.20.10.4:81/stream' 
+STREAM_URL = "http://192.168.0.211:81/stream"
 
 # --- Robust capture creator: tries FFMPEG first, then ANY ---
 def create_capture(url):

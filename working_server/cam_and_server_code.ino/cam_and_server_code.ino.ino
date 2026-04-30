@@ -6,9 +6,12 @@
 
 #include "esp_camera.h"
 #include "WiFi.h"
+#include <WebServer.h>
 
 #include <HTTPClient.h>
-const char* pythonServer = "http://192.168.0.152:5000/trigger";  //
+const char* pythonServer = "http://10.40.6.192:5000/trigger";// "http://127.0.0.1:5000/trigger"; // http://10.40.6.192:5000
+
+//"http://192.168.0.152:5000/trigger";  //
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -16,11 +19,12 @@ const char* pythonServer = "http://192.168.0.152:5000/trigger";  //
 #include <BLEAdvertisedDevice.h>
 
 // ===========================
-// Enter your WiFi credentials
+// Wi-Fi credentials (legacy — now provisioned via wifi_provisioning.ino / NVS)
 // ===========================
-const char *ssid = "T-Mobile Hotspot_6218_2.4GHz";   //"Jio Ant";  // "T-Mobile Hotspot_6218_2.4GHz";   
-const char *password =   "54786218"; //"sigmaalpha"; //"54786218";
-
+// const char *ssid =  "Jio Ant";  //"T-Mobile Hotspot_6218_2.4GHz";   //"Jio Ant";
+// const char *password = "sigmaalpha";  //"54786218"; //"sigmaalpha";
+//192.168.0.31 = jioant
+//192.168.0.211 = TMOBILE
 
 const char* BEACON_MAC = "dd:34:02:0a:2d:f1"; 
 const char* BEACON_MAC2 = "";//"dd:34:02:0a:2d:da"; 
@@ -40,6 +44,10 @@ bool flagStopScan = false;
 volatile bool beaconDetectedNear = false;
 volatile bool beaconDetectedFar = false;
 volatile bool beaconFound = false;
+// RSSI-based state, independent of cameraActive. cameraActive can desync from
+// the backend (e.g. failed near-POST, ESP32 reset), so we drive near/far purely
+// off whether RSSI is currently strong enough.
+volatile bool beaconCurrentlyNear = false;
 
 static unsigned long blockUntil = 0;       
 // int scanTime = 0.8f; //In seconds
@@ -49,6 +57,13 @@ void startCameraServer();
 void setupLedFlash();
 bool startCamera();
 bool stopCamera();
+
+// Defined in wifi_provisioning.ino
+bool loadCredentials(String& ssid, String& pass);
+bool tryConnect(const String& ssid, const String& pass);
+void startPortal();
+extern bool portalActive;
+extern WebServer server;
 
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
@@ -73,13 +88,15 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
           //Serial.printf("KBeacon found! RSSI: %d dBm\n", rssi);
           
 
-          // camera off and beacon nearby
-          // JUST SET FLAGS - NO BLOCKING OPERATIONS
-          if (!cameraActive && rssi >= RSSI_THRESHOLD) { 
-            beaconDetectedNear = true;
-          } 
-          else if (cameraActive && rssi < RSSI_THRESHOLD) { 
-            beaconDetectedFar = true;
+          // Edge-triggered: fire on transition between near and far, irrespective
+          // of cameraActive. JUST SET FLAGS - NO BLOCKING OPERATIONS.
+          bool nearNow = (rssi >= RSSI_THRESHOLD);
+          if (nearNow && !beaconCurrentlyNear) {
+            beaconCurrentlyNear = true;
+            beaconDetectedNear  = true;
+          } else if (!nearNow && beaconCurrentlyNear) {
+            beaconCurrentlyNear = false;
+            beaconDetectedFar   = true;
           }
           // if (!cameraActive && rssi >= RSSI_NEAR) { 
           //   // Signal is STRONGER (less negative) than threshold = beacon is close
@@ -204,16 +221,25 @@ void setup() {
   setupLedFlash();
 #endif
 
-  WiFi.begin(ssid, password);
-  WiFi.setSleep(false);
-
-  Serial.print("WiFi connecting");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // ---- Wi-Fi: try NVS-saved creds, fall back to provisioning portal ----
+  String savedSsid, savedPass;
+  bool connected = false;
+  if (loadCredentials(savedSsid, savedPass)) {
+    Serial.printf("[NVS] Loaded saved SSID: \"%s\"\n", savedSsid.c_str());
+    connected = tryConnect(savedSsid, savedPass);
+    if (!connected) {
+      Serial.println("[WiFi] Saved credentials failed; starting portal.");
+    }
+  } else {
+    Serial.println("[NVS] No saved credentials; starting portal.");
   }
-  Serial.println("");
-  Serial.println("WiFi connected");
+
+  if (!connected) {
+    startPortal();
+    return; // stay in portal mode; loop() will service HTTP requests
+  }
+
+  WiFi.setSleep(false);
 
   startCameraServer();
 
@@ -285,6 +311,11 @@ bool stopCamera() {
 
 
 void loop() {
+    // Provisioning portal path: no Wi-Fi creds yet, so just serve the setup page.
+    if (portalActive) {
+        server.handleClient();
+        return;
+    }
 
     // Checks that we still see the beacon within time out range
     if (millis() - lastBeaconTime > beaconTimeoutMs) {
@@ -293,10 +324,47 @@ void loop() {
         beaconFound = true;
     }
 
-    //If we have data of beacon within timeout print every 2.5 seconds 
-    static unsigned long lastRSSIPrint = 0;
-    if (beaconFound && millis() - lastRSSIPrint > 2500) {
-        lastRSSIPrint = millis();
+    // Heartbeat: only fires while cameraActive==true (i.e. we previously
+    // told the backend to start detection and it succeeded). Without this
+    // gate, an ESP32 booted while the backend was down — or a beacon sitting
+    // at naturally-weak RSSI — would flood the server with far events even
+    // though there is nothing to shut down.
+    //
+    // MISSING_GRACE_MS is intentionally long because BLE/Wi-Fi coexistence
+    // and pBLEScan->stop() during near can produce 10-15 s callback gaps
+    // even with the beacon right next to the ESP32.
+    static unsigned long lastFarHeartbeat  = 0;
+    static unsigned long lastNearHeartbeat = 0;
+    const unsigned long FAR_HEARTBEAT_MS  = 60000;
+    const unsigned long NEAR_HEARTBEAT_MS = 60000;
+    const unsigned long MISSING_GRACE_MS  = 60000;
+    bool everSeen = (lastBeaconTime != 0);
+    bool missing  = everSeen && (millis() - lastBeaconTime > MISSING_GRACE_MS);
+    if (cameraActive && missing &&
+        (lastFarHeartbeat == 0 || millis() - lastFarHeartbeat > FAR_HEARTBEAT_MS)) {
+        Serial.printf("Beacon silent for %lus → heartbeat far event\n",
+                      (millis() - lastBeaconTime) / 1000);
+        beaconDetectedFar = true;
+        if (beaconCurrentlyNear) beaconCurrentlyNear = false;
+        lastFarHeartbeat = millis();
+    }
+
+    // Near heartbeat: while the beacon is still near, re-send beacon_near
+    // every NEAR_HEARTBEAT_MS so the backend can recover detection state if
+    // it was restarted while we thought everything was running. Backend's
+    // /trigger handler is idempotent — duplicate nears are no-ops when the
+    // detection subprocess is already alive.
+    if (beaconCurrentlyNear &&
+        (millis() - lastNearHeartbeat > NEAR_HEARTBEAT_MS)) {
+        Serial.println("Beacon still near → near heartbeat");
+        beaconDetectedNear = true;
+        lastNearHeartbeat = millis();
+    }
+
+    //If we have data of beacon within timeout print every 1.5 seconds
+    //static unsigned long lastRSSIPrint = 0;
+    if (beaconFound && millis() - lastBeaconTime > 1500) {
+        lastBeaconTime = millis();
         Serial.printf("KBeacon found! RSSI: %d dBm\n", lastBeaconRSSI);
     }
 
@@ -304,16 +372,17 @@ void loop() {
     // Beacon Near send HTTP Post
     if (beaconDetectedNear) {
         beaconDetectedNear = false;  // Clear flag immediately
-        
+        lastNearHeartbeat  = millis();  // suppress next heartbeat for 60 s
+
         Serial.println("Beacon is CLOSE (strong signal)");
         Serial.println("Beacon nearby → notifying Python");
-        
+
         // NOW do the slow HTTP operation in main loop
         HTTPClient http;
         http.begin(pythonServer);
         http.addHeader("Content-Type", "application/json");
         int httpCode = http.POST("{\"event\":\"beacon_near\"}");
-        
+
         Serial.printf("HTTP Response code: %d\n", httpCode);
         if (httpCode > 0) {
             String payload = http.getString();
@@ -321,8 +390,8 @@ void loop() {
             cameraActive = true;
         }
         http.end();
-        
-        //Stop BLE scanning 
+
+        //Stop BLE scanning
         pBLEScan->stop();
         flagStopScan = false;
         blockUntil = millis() + 1000;
@@ -349,18 +418,19 @@ void loop() {
         http.end();
     }
 
-    // camera already on and timer up -> resume scanning
-    if(cameraActive){
-      if (blockUntil != 0 && millis() > blockUntil) {
-          Serial.println("Resuming BLE scan");
-          pBLEScan->start(0, nullptr);
-          blockUntil = 0;
-      }
+    // Resume scanning 1 s after a near-stop, regardless of cameraActive.
+    // The previous version only resumed when cameraActive==true, which meant
+    // a failed near-POST (backend down) would leave the scan stopped forever
+    // — and the ESP32 would go deaf to the beacon until reboot.
+    if (blockUntil != 0 && millis() > blockUntil) {
+        Serial.println("Resuming BLE scan");
+        pBLEScan->start(0, nullptr);
+        blockUntil = 0;
     }
     
     // esp status print every 5 seconds
     static unsigned long lastPrint = 0;
-    if (millis() - lastPrint > 5000) {
+    if (millis() - lastPrint > 15000) {
       float seconds = millis() / 1000.0;
       Serial.printf("Time: %.1fs | Temp: %.1f°C | ", seconds, temperatureRead());
       Serial.printf("WiFi RSSI: %d dBm | ", WiFi.RSSI());

@@ -1,0 +1,5 @@
+path: C:\Users\Anthony\Documents\CS490\code\user_bottles\bob_the_builder_advil
+train: images/train
+val:   images/val
+nc: 1
+names: ['bob_the_builder_advil']

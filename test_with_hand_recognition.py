@@ -11,6 +11,96 @@ import threading
 import queue
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
+import os
+import requests
+
+# ─── Backend event reporting ──────────────────────────────────────────────────
+# URL of the Flask backend server (backend/server.py).
+# Override with PILLTEK_BACKEND env var: e.g. http://192.168.0.152:5000
+_BACKEND_URL = os.environ.get('PILLTEK_BACKEND', 'http://127.0.0.1:5000')
+
+# Minimum seconds between consecutive POST requests for the same overlap event.
+# Prevents flooding the backend when a hand stays on a bottle.
+_EVENT_DEBOUNCE_SECS = 5.0
+
+# Hydrated at runtime from the PILLTEK_LABEL_MAP env var (set by backend /trigger).
+# Format of env var: JSON object {"A": "<med-uuid>", "B": "<med-uuid>", ...}.
+# Fully empty by default — detection still runs but never marks medications taken.
+import json as _json
+import re  as _re
+
+CLASS_TO_MED_ID: dict[int, str] = {}
+_LABEL_MED_MAP: dict[str, str]  = _json.loads(os.environ.get('PILLTEK_LABEL_MAP', '{}'))
+_PATIENT_ID:    str | None       = os.environ.get('PILLTEK_PATIENT_ID') or None
+
+_CLASS_NAMES_GLOBAL: list[str] = []          # set in run_infer after model load
+_last_event_time:    dict[int, float] = {}   # per-class debounce tracker
+
+_TRAILING_LETTER = _re.compile(r'\b([A-Za-z])\s*$')
+
+
+def hydrate_class_to_med_id(model_names) -> dict[int, str]:
+    """Return {class_id: medication_id} from model.names + _LABEL_MED_MAP.
+
+    Accepts model.names as either a dict {id: name} or a list [name, ...].
+    Pure helper; populates the module-global CLASS_TO_MED_ID as a side
+    effect for callers that already read it.
+    """
+    items = enumerate(model_names) if isinstance(model_names, list) else model_names.items()
+    out: dict[int, str] = {}
+    for class_id, name in items:
+        m = _TRAILING_LETTER.search(name or '')
+        if not m:
+            continue
+        med = _LABEL_MED_MAP.get(m.group(1).upper())
+        if med:
+            out[int(class_id)] = med
+    CLASS_TO_MED_ID.clear()
+    CLASS_TO_MED_ID.update(out)
+    if out:
+        print(f'[Pipeline] CLASS_TO_MED_ID hydrated: {out}')
+    else:
+        print('[Pipeline] CLASS_TO_MED_ID empty — no allowed-label classes found')
+    return out
+
+
+def post_detection_event(event_type: str, bottle_class: int, confidence: float) -> None:
+    """
+    Fire-and-forget POST to the backend server.
+    Runs in a daemon thread so it never blocks the detection loop.
+    """
+    now = time.time()
+    last = _last_event_time.get(bottle_class, 0.0)
+    if now - last < _EVENT_DEBOUNCE_SECS:
+        return   # still within debounce window
+    _last_event_time[bottle_class] = now
+
+    label       = _CLASS_NAMES_GLOBAL[bottle_class] if bottle_class < len(_CLASS_NAMES_GLOBAL) else f'class_{bottle_class}'
+    med_id      = CLASS_TO_MED_ID.get(bottle_class)
+    payload     = {
+        'event_type':    event_type,
+        'bottle_class':  bottle_class,
+        'bottle_label':  label,
+        'confidence':    round(confidence, 4),
+        'raw_meta':      {'source': 'yolo_hand_detection'},
+    }
+    if med_id:
+        payload['medication_id'] = med_id
+    if _PATIENT_ID:
+        payload['patient_id'] = _PATIENT_ID
+
+    def _post():
+        try:
+            resp = requests.post(
+                f'{_BACKEND_URL}/detection-event',
+                json=payload,
+                timeout=3,
+            )
+            print(f'[Event] Posted {event_type} cls={bottle_class} → {resp.status_code}')
+        except Exception as e:
+            print(f'[Event] POST failed: {e}')
+
+    threading.Thread(target=_post, daemon=True).start()
 
 """
 Usage command:
@@ -77,6 +167,79 @@ def create_capture(url):
     return cap
 
 
+# requests-based MJPEG reader. Mirrors backend/server.py:MjpegCapture and
+# replaces cv2.VideoCapture(url, CAP_FFMPEG) for ESP32-CAM streams.
+# CAP_FFMPEG stalls hard on this exact stream (the [Loop] stream-fps drops
+# from 40 to 0 over time even with no other CPU load); requests + manual JPEG
+# framing stays responsive and reconnects automatically on drop.
+class MjpegCapture:
+    def __init__(self, url: str):
+        self._url     = url
+        self._frame   = None
+        self._lock    = threading.Lock()
+        self._stopped = False
+        self._thread  = threading.Thread(target=self._update, daemon=True)
+        self._thread.start()
+
+    def _update(self):
+        # 10 s stall before reconnecting — the ESP32 streams in bursts and
+        # smaller stalls during BLE callbacks are normal. chunk_size=512 keeps
+        # requests from buffering several JPEGs worth of bytes before yielding.
+        STALL_SECONDS = 10.0
+        while not self._stopped:
+            try:
+                with requests.get(self._url, stream=True, timeout=(5, 8)) as r:
+                    buf     = b''
+                    last_ok = time.monotonic()
+                    for chunk in r.iter_content(chunk_size=512):
+                        if self._stopped:
+                            return
+                        if not chunk:
+                            continue
+                        buf += chunk
+                        if time.monotonic() - last_ok > STALL_SECONDS:
+                            raise TimeoutError(
+                                f'no new JPEG in {STALL_SECONDS}s — forcing reconnect'
+                            )
+                        while True:
+                            soi = buf.find(b'\xff\xd8')
+                            eoi = buf.find(b'\xff\xd9')
+                            if soi == -1 or eoi == -1 or eoi <= soi:
+                                break
+                            jpg = buf[soi:eoi + 2]
+                            buf = buf[eoi + 2:]
+                            frame = cv2.imdecode(
+                                np.frombuffer(jpg, dtype=np.uint8),
+                                cv2.IMREAD_COLOR,
+                            )
+                            if frame is not None:
+                                with self._lock:
+                                    self._frame = frame.copy()
+                                last_ok = time.monotonic()
+            except Exception as exc:
+                if not self._stopped:
+                    print(f'[MjpegCapture] stream error, reconnecting in 1 s: {exc}')
+                    time.sleep(1)
+
+    def read(self):
+        with self._lock:
+            if self._frame is None:
+                return False, None
+            return True, self._frame.copy()
+
+    @property
+    def frame_id(self):
+        # Match the ThreadedVideoCapture surface so the stream-fps counter
+        # in run_infer can detect new vs. cached frames. We tick it via the
+        # _frame replacement, but a simple id() of the array works since
+        # _update copies before storing.
+        with self._lock:
+            return id(self._frame) if self._frame is not None else 0
+
+    def release(self):
+        self._stopped = True
+
+
 class ThreadedVideoCapture:
     def __init__(self, src):
         self.src        = src
@@ -90,6 +253,7 @@ class ThreadedVideoCapture:
             exit()
         self.ret        = False
         self.frame      = None
+        self.frame_id   = 0          # increments every time the reader thread stores a NEW frame
         self.stopped    = False
         self.fail_count = 0
         self.last_ok    = time.time()
@@ -120,6 +284,7 @@ class ThreadedVideoCapture:
             if ret and frame is not None:
                 self.ret        = True
                 self.frame      = frame
+                self.frame_id  += 1
                 self.fail_count = 0
                 self.last_ok    = time.time()
             else:
@@ -310,27 +475,64 @@ GRAB_PADDING = 10  # pixels to expand bottle box in each direction for grab dete
 GRAB_HISTORY_LEN = 16  # number of frames to smooth over
 _grab_history: dict[int, list[bool]] = {}  # per-hand history
 
-def hand_overlaps_bottle(hand_idx: int, hand_landmarks, bottle_boxes, frame_shape) -> bool:
+# Minimum YOLO confidence required before a hand-bottle overlap is reported
+# to the backend. Below this, we still draw the orange box (visual feedback)
+# but suppress the detection-event POST to avoid recording uncertain bottles
+# as "Taken".
+EVENT_BOTTLE_CONF_THRESHOLD = 0.80
+
+# Per-hand cache of the most recent bottle that had a raw overlap. Used so the
+# smoothed "yes" decision can name a bottle even on the exact frame the hand is
+# briefly off the box.
+_last_overlap_bottle: dict[int, tuple[int, float]] = {}
+
+
+def hand_overlaps_bottle(hand_idx: int, hand_landmarks, bottle_boxes, frame_shape):
+    """Returns (overlapping, bottle_cls, bottle_conf).
+
+    overlapping is the smoothed yes/no over the last GRAB_HISTORY_LEN frames
+    (same as before). When it's True, bottle_cls/bottle_conf identify which
+    bottle the hand is on right now, falling back to the most recent overlap
+    if this exact frame has no raw hit. When False, both are None.
+
+    IMPORTANT: must be called exactly once per hand per frame, since each call
+    appends to _grab_history. Callers share the result for both drawing and
+    event firing.
+    """
     h, w = frame_shape[:2]
     points = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
-    raw = False
-    for (x1, y1, x2, y2, _, _) in bottle_boxes:
+    raw_hit       = False
+    cur_cls       = None
+    cur_conf      = None
+    for (x1, y1, x2, y2, cls, conf) in bottle_boxes:
         px1, py1 = x1 - GRAB_PADDING, y1 - GRAB_PADDING
         px2, py2 = x2 + GRAB_PADDING, y2 + GRAB_PADDING
         for (hx, hy) in points:
             if px1 <= hx <= px2 and py1 <= hy <= py2:
-                raw = True
+                raw_hit  = True
+                cur_cls  = cls
+                cur_conf = conf
                 break
-        if raw:
+        if raw_hit:
             break
 
     history = _grab_history.setdefault(hand_idx, [])
-    history.append(raw)
+    history.append(raw_hit)
     if len(history) > GRAB_HISTORY_LEN:
         history.pop(0)
 
-    # only flip state when the majority of recent frames agree
-    return sum(history) > len(history) / 2
+    if raw_hit:
+        _last_overlap_bottle[hand_idx] = (cur_cls, cur_conf)
+
+    overlapping = sum(history) > len(history) / 2
+    if not overlapping:
+        return False, None, None
+    if cur_cls is not None:
+        return True, cur_cls, cur_conf
+    prev = _last_overlap_bottle.get(hand_idx)
+    if prev is not None:
+        return True, prev[0], prev[1]
+    return False, None, None
 
 
 def draw_pill_boxes(frame, bottle_boxes, class_names):
@@ -345,12 +547,18 @@ def draw_pill_boxes(frame, bottle_boxes, class_names):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
 
 
-def draw_hands(frame, hand_results, bottle_boxes):
+def draw_hands(frame, hand_results, bottle_boxes, hand_overlap_results):
+    """`hand_overlap_results` is a list of (overlapping, cls, conf) tuples,
+    one per hand, precomputed by the caller so we don't double-append to
+    _grab_history (drawing and event firing share one decision per frame)."""
     if hand_results is None or not hand_results.hand_landmarks:
         return
     h, w = frame.shape[:2]
     for hand_idx, hand_landmarks in enumerate(hand_results.hand_landmarks):
-        overlapping = hand_overlaps_bottle(hand_idx, hand_landmarks, bottle_boxes, frame.shape)
+        overlapping = (
+            hand_overlap_results[hand_idx][0]
+            if hand_idx < len(hand_overlap_results) else False
+        )
         color       = HAND_OVERLAP_COLOR if overlapping else HAND_COLOR
         points      = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
         for (a, b) in HAND_CONNECTIONS:
@@ -391,13 +599,16 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
     pill_model  = YOLO(str(weights))
     class_names = [pill_model.names[i] for i in sorted(pill_model.names.keys())]
 
+    # Hydrate label map from env so detection events include medication_id
+    hydrate_class_to_med_id(pill_model.names)
+
     base_options = mp_python.BaseOptions(model_asset_path=HAND_MODEL_PATH)
     hand_options = mp_vision.HandLandmarkerOptions(
         base_options=base_options,
         running_mode=mp_vision.RunningMode.VIDEO,
-        num_hands=2,
-        min_hand_detection_confidence=0.4,
-        min_tracking_confidence=0.4,
+        num_hands=1,
+        min_hand_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
     )
     landmarker = mp_vision.HandLandmarker.create_from_options(hand_options)
 
@@ -405,21 +616,47 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
     pill_worker = PillWorker(pill_model, device, imgsz, conf)
     hand_worker = HandWorker(landmarker)
 
+    # Make class names available to the event-posting helper.
+    global _CLASS_NAMES_GLOBAL
+    _CLASS_NAMES_GLOBAL = class_names
+
     print(f"[INFO] Inference using: {weights}")
     print(f"[INFO] Source: {source}")
     print(f"[INFO] Classes: {class_names}")
+    print(f"[INFO] Backend: {_BACKEND_URL}")
     print("[INFO] Press 'q' to quit.")
 
     window_name = "Pill + Hand Detection"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-    src      = int(source) if source.isdigit() else source
-    cap      = ThreadedVideoCapture(src)
+    src = int(source) if source.isdigit() else source
+    cap = ThreadedVideoCapture(src)
     start_ms = int(time.time() * 1000)
     no_frame_warned = False
 
+    # FPS instrumentation: print main-loop fps every second so we can see
+    # what is actually slowing down (hand inference vs drawing vs stream).
+    fps_t0      = time.monotonic()
+    fps_n       = 0
+    last_seen_frame_id = -1
+    stream_fps_count   = 0
+
+    # Throttle hand inference. MediaPipe's per-frame cost is significant when
+    # hands are visible (~60-100 ms vs ~10 ms idle). Submitting only every
+    # HAND_SUBMIT_EVERY_N frames lets the main loop and YOLO worker keep up;
+    # the cached hand result is reused on skipped frames.
+    HAND_SUBMIT_EVERY_N = 2
+    frame_idx = 0
+
     while True:
+        t0 = time.monotonic()
         ok, frame = cap.read()
+        t_read = time.monotonic() - t0
+        # Did the background reader actually get a new frame since last iter?
+        cur_frame_id = cap.frame_id
+        if cur_frame_id != last_seen_frame_id:
+            stream_fps_count += 1
+            last_seen_frame_id = cur_frame_id
         if not ok or frame is None:
             if not no_frame_warned:
                 print("[WARN] Waiting for stream frames...")
@@ -430,22 +667,84 @@ def run_infer(weights: Path, device: str, imgsz: int, conf: float, source: str) 
 
         timestamp_ms = int(time.time() * 1000) - start_ms
 
-        # Submit frames to workers — fire and forget, no waiting
+        # Submit frames to workers — fire and forget, no waiting.
+        # YOLO every frame; MediaPipe every Nth frame so its heavier per-call
+        # cost (especially while a hand is visible) doesn't starve the loop.
+        t0 = time.monotonic()
         pill_worker.submit(frame.copy())
-        hand_worker.submit(frame.copy(), timestamp_ms)
+        if frame_idx % HAND_SUBMIT_EVERY_N == 0:
+            hand_worker.submit(frame.copy(), timestamp_ms)
+        frame_idx += 1
+        t_submit = time.monotonic() - t0
 
         # Draw latest available results immediately
+        t0 = time.monotonic()
         pill_snap    = pill_worker.get_result()
         hand_snap    = hand_worker.get_result()
         bottle_boxes = get_bottle_boxes(pill_snap)
+        t_get = time.monotonic() - t0
 
+        # Compute overlap once per hand per frame — single source of truth
+        # for the orange-box visualization AND the backend event POST.
+        t0 = time.monotonic()
+        hand_overlap_results: list[tuple[bool, int | None, float | None]] = []
+        if hand_snap is not None and hand_snap.hand_landmarks:
+            for hi, hand_lms in enumerate(hand_snap.hand_landmarks):
+                hand_overlap_results.append(
+                    hand_overlaps_bottle(hi, hand_lms, bottle_boxes, frame.shape)
+                )
+        t_overlap = time.monotonic() - t0
+
+        t0 = time.monotonic()
         draw_pill_boxes(frame, bottle_boxes, class_names)
-        draw_hands(frame, hand_snap, bottle_boxes)
+        draw_hands(frame, hand_snap, bottle_boxes, hand_overlap_results)
         draw_legend(frame, class_names)
+        t_draw = time.monotonic() - t0
 
+        # ── Report overlap events to the backend ──────────────────────────────
+        # Fires only when the smoother says this hand is grabbing AND we know
+        # which bottle. The class/conf come from the same overlap check the
+        # orange box uses, so what you see is what gets posted.
+        for (overlapping, cls, conf) in hand_overlap_results:
+            if overlapping and cls is not None and conf is not None \
+                    and conf >= EVENT_BOTTLE_CONF_THRESHOLD:
+                post_detection_event('hand_bottle_overlap', cls, conf)
+
+        t0 = time.monotonic()
         cv2.imshow(window_name, frame)
-        if (cv2.waitKey(1) & 0xFF) == ord("q"):
+        key_pressed = cv2.waitKey(1) & 0xFF
+        t_show = time.monotonic() - t0
+        if key_pressed == ord("q"):
             break
+
+        fps_n += 1
+        now = time.monotonic()
+        # Flag any single frame that took >100 ms — that's the freeze visible
+        # to the eye even when the 1-second average looks fine.
+        iter_total = t_read + t_submit + t_get + t_overlap + t_draw + t_show
+        if iter_total > 0.10:
+            hand_count = (
+                len(hand_snap.hand_landmarks) if hand_snap is not None and hand_snap.hand_landmarks else 0
+            )
+            print(
+                f'[SLOW] {iter_total*1000:.0f}ms  hands={hand_count}  '
+                f'read={t_read*1000:.0f}  submit={t_submit*1000:.0f}  '
+                f'get={t_get*1000:.0f}  overlap={t_overlap*1000:.0f}  '
+                f'draw={t_draw*1000:.0f}  show={t_show*1000:.0f}'
+            )
+        if now - fps_t0 >= 1.0:
+            hand_count = (
+                len(hand_snap.hand_landmarks) if hand_snap is not None and hand_snap.hand_landmarks else 0
+            )
+            elapsed = now - fps_t0
+            print(
+                f'[Loop] loop={fps_n/elapsed:.1f} fps  '
+                f'stream={stream_fps_count/elapsed:.1f} fps  '
+                f'hands={hand_count}  bottles={len(bottle_boxes)}'
+            )
+            fps_n  = 0
+            stream_fps_count = 0
+            fps_t0 = now
 
     pill_worker.stop()
     hand_worker.stop()
@@ -469,7 +768,7 @@ DATASETS = {
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run YOLO + MediaPipe hand detection inference.")
     parser.add_argument("--weights", default="runs/detect/runs/train_v10/weights/best.pt", help="Path to YOLO weights (.pt)")
-    parser.add_argument("--source",  default="http://192.168.0.31:81/stream",
+    parser.add_argument("--source",  default="http://10.40.13.205:81/stream",
                         help="Video source: ESP32 stream URL or webcam index (0, 1, 2...)")
     parser.add_argument("--conf",    type=float, default=0.50, help="Confidence threshold")
     parser.add_argument("--imgsz",   type=int,   default=640,  help="Image size")

@@ -1,0 +1,5 @@
+path: C:\Users\Anthony\Documents\CS490\code\user_bottles\anthony_taylor_tylenol
+train: images/train
+val:   images/val
+nc: 1
+names: ['anthony_taylor_tylenol']

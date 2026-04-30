@@ -8,7 +8,7 @@ import os
 import time
 from datetime import datetime
 
-STREAM_URL = "http://192.168.0.211:81/stream" #"http://172.20.10.4:81/stream"
+STREAM_URL = "http://192.168.0.211:81/stream"
 cap = cv2.VideoCapture(STREAM_URL)
 
 # print("Press 's' to save an image, 'q' to quit")

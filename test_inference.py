@@ -14,7 +14,7 @@ import threading
 """
 Usage command:
 python test_inference.py --weights runs/detect/runs/train_v10/weights/best.pt
-
+python test_inference.py --weights runs/user_tuned_1/weights/best.pt
 
 
 """
@@ -200,7 +200,7 @@ def main() -> int:
     parser.add_argument("--device", default="cpu", help="Device: cpu or GPU id like 0 or 0,1")
     parser.add_argument("--weights", default=None, help="Weights for inference (required if --mode infer)")
     parser.add_argument("--conf", type=float, default=0.60, help="Confidence threshold for webcam inference")
-    parser.add_argument("--source", default="http://192.168.0.211:81/stream", 
+    parser.add_argument("--source", default="http://192.168.0.31:81/stream",
                         help="Video source: ESP32 stream URL or webcam index (0, 1, 2, etc.)")
     args = parser.parse_args()
 

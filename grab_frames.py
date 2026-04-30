@@ -3,7 +3,7 @@ import time
 import os
 
 #Replace with your ESP32 stream URL
-STREAM_URL = "http://192.168.0.211:81/stream"        #"http://172.20.10.4:81/stream"  # Your hotspot IP
+STREAM_URL = "http://192.168.0.211:81/stream"
 
 #Connect to stream
 cap = cv2.VideoCapture(STREAM_URL)
