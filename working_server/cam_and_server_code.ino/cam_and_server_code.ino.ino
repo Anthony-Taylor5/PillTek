@@ -9,7 +9,9 @@
 #include <WebServer.h>
 
 #include <HTTPClient.h>
-const char* pythonServer = "http://192.168.0.152:5000/trigger";  //
+const char* pythonServer = "http://10.40.6.192:5000/trigger";// "http://127.0.0.1:5000/trigger"; // http://10.40.6.192:5000
+
+//"http://192.168.0.152:5000/trigger";  //
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>

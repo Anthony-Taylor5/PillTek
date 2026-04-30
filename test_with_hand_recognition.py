@@ -768,7 +768,7 @@ DATASETS = {
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run YOLO + MediaPipe hand detection inference.")
     parser.add_argument("--weights", default="runs/detect/runs/train_v10/weights/best.pt", help="Path to YOLO weights (.pt)")
-    parser.add_argument("--source",  default="http://192.168.0.211:81/stream",
+    parser.add_argument("--source",  default="http://10.40.13.205:81/stream",
                         help="Video source: ESP32 stream URL or webcam index (0, 1, 2...)")
     parser.add_argument("--conf",    type=float, default=0.50, help="Confidence threshold")
     parser.add_argument("--imgsz",   type=int,   default=640,  help="Image size")
