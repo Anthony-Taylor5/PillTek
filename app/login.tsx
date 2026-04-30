@@ -15,6 +15,7 @@ import BG from "../assets/pills/pill8.jpg";
 
 import {
   createUserWithEmailAndPassword,
+  fetchSignInMethodsForEmail,
   signInWithEmailAndPassword,
 } from "firebase/auth";
 import { auth } from "../firebaseConfig";
@@ -49,13 +50,34 @@ export default function Login() {
       const userCredential = await signInWithEmailAndPassword(
         auth,
         email.trim(),
-        password
+        password.trim()
       );
       console.log("LOGIN SUCCESS:", userCredential.user.email);
       navigateToDashboard();
     } catch (error: any) {
       console.log("LOGIN ERROR:", error.code, error.message);
-      Alert.alert("Login failed", error.code);
+
+      if (error.code === "auth/invalid-credential" || error.code === "auth/user-not-found" || error.code === "auth/wrong-password") {
+        // Diagnose: check if the email exists at all
+        try {
+          const methods = await fetchSignInMethodsForEmail(auth, email.trim());
+          if (methods.length === 0) {
+            Alert.alert("Login failed", "No account found with that email address. Please create an account first.");
+          } else {
+            Alert.alert("Login failed", "Incorrect password for this account.");
+          }
+        } catch {
+          Alert.alert("Login failed", "Invalid email or password.");
+        }
+      } else if (error.code === "auth/invalid-email") {
+        Alert.alert("Login failed", "That doesn't look like a valid email address.");
+      } else if (error.code === "auth/too-many-requests") {
+        Alert.alert("Login failed", "Too many failed attempts. Try again later or reset your password.");
+      } else if (error.code === "auth/network-request-failed") {
+        Alert.alert("Login failed", "Network error — check your internet connection.");
+      } else {
+        Alert.alert("Login failed", error.code);
+      }
     }
   };
 
@@ -71,7 +93,7 @@ export default function Login() {
       const userCredential = await createUserWithEmailAndPassword(
         auth,
         email.trim(),
-        password
+        password.trim()
       );
       console.log("SIGNUP SUCCESS:", userCredential.user.email);
       navigateToDashboard();

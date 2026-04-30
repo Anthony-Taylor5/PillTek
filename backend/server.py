@@ -30,7 +30,7 @@ import sys
 import time
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 
@@ -150,6 +150,10 @@ def _upsert_med_log(medication_id: str, scheduled_time: str | None, status: str)
             row,
             on_conflict='medication_id,log_date,scheduled_time'
         ).execute()
+        # Mirror the latest log status onto the parent medication so the
+        # patient/caregiver UI cards reflect today's outcome without having
+        # to join medication_logs.
+        _db.table('medications').update({'status': status}).eq('id', medication_id).execute()
     except Exception as e:
         print(f'[Supabase] _upsert_med_log failed: {e}', file=sys.stderr)
 
@@ -761,6 +765,50 @@ def capture_status(session_id):
     }), 200
 
 
+def _reset_medications_to_pending() -> int:
+    """Set medications.status = 'Pending' for every row that isn't already.
+    Returns the number of rows touched (or -1 on failure).
+    """
+    if not _db:
+        return -1
+    try:
+        res = (
+            _db.table('medications')
+               .update({'status': 'Pending'})
+               .in_('status', ['Taken', 'Missed'])
+               .execute()
+        )
+        n = len(res.data or [])
+        print(f'[DailyReset] {n} medication(s) reset to Pending')
+        return n
+    except Exception as e:
+        print(f'[DailyReset] failed: {e}', file=sys.stderr)
+        return -1
+
+
+def _daily_reset_loop() -> None:
+    """Background thread: sleep until the next local midnight, then reset
+    all medication statuses. Repeats forever. Daemon-threaded so it dies
+    with the server."""
+    while True:
+        now  = datetime.now()
+        next_midnight = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        wait = max((next_midnight - now).total_seconds(), 1.0)
+        print(f'[DailyReset] next reset in {wait/3600:.2f}h at {next_midnight}')
+        time.sleep(wait)
+        _reset_medications_to_pending()
+
+
+@app.route('/reset-daily-status', methods=['POST'])
+def reset_daily_status():
+    """Manually trigger the daily reset (for testing / cron). Always returns
+    the row count so callers can verify the reset ran."""
+    n = _reset_medications_to_pending()
+    return jsonify({'reset_count': n}), 200
+
+
 @app.route('/pipeline-debug', methods=['POST'])
 def pipeline_debug():
     """Diagnostic: run the patient + label map lookup that /trigger would,
@@ -794,5 +842,6 @@ def health():
 if __name__ == '__main__':
     host = os.environ.get('BACKEND_HOST', '0.0.0.0')
     port = int(os.environ.get('BACKEND_PORT', 5000))
+    threading.Thread(target=_daily_reset_loop, daemon=True).start()
     print(f'[Server] Listening on {host}:{port}')
     app.run(host=host, port=port, threaded=True)

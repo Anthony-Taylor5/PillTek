@@ -31,6 +31,7 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
 
 # typescript
@@ -41,3 +42,18 @@ app-example
 # generated native folders
 /ios
 /android
+
+# IDE
+.idea/
+
+# Python caches
+__pycache__/
+
+# Local agent / tooling state
+.appium-cli/
+.claude/
+.playwright-cli/
+android-appium-claude/
+
+# Root-level screenshot artifacts
+/*.png
